@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "target": "ES2022",
+    "strict": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "rootDir": "src/domain",
+    "outDir": ".test-out"
+  },
+  "include": ["src/domain/**/*.ts"]
+}
