@@ -1,0 +1,33 @@
+{
+  "name": "salespole-api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "API NestJS do Sales Pole (forca de vendas Pole Alimentos)",
+  "scripts": {
+    "build": "nest build",
+    "start": "nest start",
+    "start:dev": "nest start --watch",
+    "start:prod": "node dist/main.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "sync:vendedor": "nest build && node dist/cli/sync-vendedor.js",
+    "test:push": "nest build && node test/push.flow.test.cjs",
+    "criar:usuario": "nest build && node dist/cli/criar-usuario.js"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/config": "^4.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@nestjs/platform-express": "^11.0.0",
+    "@nestjs/schedule": "^6.0.0",
+    "@supabase/supabase-js": "^2.45.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "@nestjs/cli": "^11.0.0",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}
