@@ -14,14 +14,25 @@ METHOD salespole_criar_pedido.
   "   "itens": [ { "produto": "1234", "unidade": "CX", "quantidade": "10", "preco": "" } ]
   " }
   "
-  " Somente Z001. Centro (plant) e deposito (lgort) NAO sao enviados: o SAP
-  " determina, como no app atual.
+  " Tipos: venda = Z001 | bonificacao = Z011 (tipo = 'bonificacao'). Centro (plant) e deposito (lgort)
+  " NAO sao enviados: o SAP determina, como no app atual.
   "
-  " DATA DE ENTREGA: proxima data de entrega do cliente (ZSDT111) estritamente
-  " depois da compra. Base = a maior entre dt_criacao e hoje (pedido criado
+  " BONIFICACAO (so chega aqui DEPOIS de aprovada no painel): tipo_bonificacao = CODIGO do tipo
+  " (ORD_REASON, 3 posicoes; padrao 115) e centro_custo = CODIGO do centro de custo (KOSTL, 10 posicoes;
+  " padrao 2001501007). O app manda so o codigo (a descricao fica no cadastro do painel).
+  " PURCH_NO_C = 'BONIFICAÇÃO'. O centro de custo e gravado direto na VBAK (MODIFY vbak), como no post_pedido atual.
+  " A justificativa NAO vem para o SAP: fica so no Supabase, para quem aprova.
+  "
+  " DATA DE ENTREGA: primeiro dia de entrega do cliente (ZSDT111) que respeite o
+  " PRAZO DE PRODUCAO do pedido: base + maior prazo (1 ou 2 dias) entre os itens
+  " (ver prazo_producao). Base = a maior entre dt_criacao e hoje (pedido criado
   " offline e sincronizado depois nao pode ficar com data no passado). Se o app
   " mandar dt_entrega, ela precisa cair num dia de entrega do cliente e ser
-  " posterior a base; senao 422. A data usada volta na resposta.
+  " >= base + prazo; senao 422. A data usada volta na resposta.
+  "
+  " CORTE E FERIADOS (decididos pela API, que manda os dois campos):
+  "   apos_corte = 'true'  -> pedido feito depois das 17h (Sao Paulo) conta como do DIA SEGUINTE
+  "   feriados   = [AAAA-MM-DD] -> feriados nacionais/do estado/da cidade do cliente: a entrega nunca cai neles
   "
   " SPLIT: o pedido do app vira ate 2 ordens no SAP, uma por tipo de material
   "   FERT       -> organizacao 2100/2002
@@ -56,6 +67,11 @@ METHOD salespole_criar_pedido.
            ordem_compra_cliente TYPE string,
            endereco_entrega TYPE string,
            observacao     TYPE string,
+           tipo           TYPE string,        " venda (padrao) | bonificacao
+           tipo_bonificacao TYPE string,      " ORD_REASON (so bonificacao)
+           centro_custo   TYPE string,        " KOSTL (so bonificacao)
+           apos_corte     TYPE string,        " 'true' = feito depois da hora de corte (conta como dia seguinte)
+           feriados       TYPE string_table,  " AAAA-MM-DD: dias em que nao ha entrega para este cliente
            itens          TYPE tt_item_req,
          END OF ty_req,
 
@@ -117,6 +133,10 @@ METHOD salespole_criar_pedido.
         lt_return  TYPE STANDARD TABLE OF bapiret2,
         lt_dias    TYPE string_table,
         lv_base    TYPE d,
+        lv_bonif   TYPE abap_bool,
+        lv_cc      TYPE kostl,
+        lv_prazo   TYPE i,
+        lv_minima  TYPE d,
         lv_refd    TYPE d VALUE '19000101',   " uma segunda-feira
         lv_dia     TYPE string,
         lv_txt     TYPE string,
@@ -134,6 +154,8 @@ METHOD salespole_criar_pedido.
                 iv_msg    = 'Obrigatorios: codvendedor, codigocli, codigo_interno, itens' ).
     RETURN.
   ENDIF.
+
+  lv_bonif  = xsdbool( to_lower( ls_req-tipo ) = 'bonificacao' ).
 
   lv_dt_ent = parse_data( ls_req-dt_entrega ).
   lv_dt_cri = parse_data( ls_req-dt_criacao ).
@@ -158,7 +180,14 @@ METHOD salespole_criar_pedido.
   " Data de entrega: proxima entrega do cliente depois da compra
   " ------------------------------------------------------------------
   lt_dias = dias_entrega( lv_kunnr ).
-  lv_base = COND #( WHEN lv_dt_cri > sy-datum THEN lv_dt_cri ELSE sy-datum ).
+  " pedido feito depois do corte (17h) conta como do dia seguinte; offline/sincronizado depois nunca fica no passado
+  DATA(lv_dt_comercial) = COND d( WHEN ls_req-apos_corte = 'true' THEN lv_dt_cri + 1 ELSE lv_dt_cri ).
+  lv_base = COND #( WHEN lv_dt_comercial > sy-datum THEN lv_dt_comercial ELSE sy-datum ).
+
+  " prazo minimo de producao: o maior entre os itens; a entrega so vale a partir de base + prazo
+  lv_prazo  = prazo_producao( VALUE ty_t_matnr( FOR a IN ls_req-itens
+                                                 ( CONV matnr( |{ a-produto ALPHA = IN WIDTH = 18 }| ) ) ) ).
+  lv_minima = lv_base + lv_prazo.
 
   IF ls_req-dt_entrega IS NOT INITIAL.
 
@@ -166,10 +195,14 @@ METHOD salespole_criar_pedido.
     DATA(lv_pedida) = parse_data( ls_req-dt_entrega ).
     lv_dia = |{ ( lv_pedida - lv_refd ) MOD 7 + 1 }|.
     READ TABLE lt_dias TRANSPORTING NO FIELDS WITH KEY table_line = lv_dia.
+    DATA(lv_dia_ok) = sy-subrc.
+    DATA(lv_ped_iso) = iso_data( lv_pedida ).
+    READ TABLE ls_req-feriados TRANSPORTING NO FIELDS WITH KEY table_line = lv_ped_iso.
+    DATA(lv_feriado) = sy-subrc.
 
-    IF lv_pedida IS INITIAL OR lv_pedida <= lv_base OR sy-subrc <> 0.
+    IF lv_pedida IS INITIAL OR lv_pedida < lv_minima OR lv_dia_ok <> 0 OR lv_feriado = 0.
       send_error( iv_status = 422
-                  iv_msg    = 'dt_entrega invalida: precisa ser dia de entrega do cliente e posterior a compra' ).
+                  iv_msg    = |dt_entrega invalida: precisa ser dia de entrega do cliente e respeitar o prazo de producao ({ lv_prazo } dia(s) apos a compra)| ).
       RETURN.
     ENDIF.
 
@@ -177,12 +210,19 @@ METHOD salespole_criar_pedido.
 
   ELSE.
 
-    lv_dt_ent = lv_base.
-    DO 14 TIMES.
+    " parte do dia anterior ao primeiro dia possivel (base + prazo)
+    lv_dt_ent = lv_minima - 1.
+    DO 30 TIMES.
       lv_dt_ent = lv_dt_ent + 1.
       lv_dia = |{ ( lv_dt_ent - lv_refd ) MOD 7 + 1 }|.
       READ TABLE lt_dias TRANSPORTING NO FIELDS WITH KEY table_line = lv_dia.
-      IF sy-subrc = 0.
+      IF sy-subrc <> 0.
+        CONTINUE.
+      ENDIF.
+      " dia de entrega do cliente: se for feriado, pula para o proximo
+      DATA(lv_data_iso) = iso_data( lv_dt_ent ).
+      READ TABLE ls_req-feriados TRANSPORTING NO FIELDS WITH KEY table_line = lv_data_iso.
+      IF sy-subrc <> 0.
         EXIT.
       ENDIF.
     ENDDO.
@@ -308,7 +348,8 @@ METHOD salespole_criar_pedido.
     " --- cabecalho ---
     ls_hdrx-updateflag = 'I'.
 
-    ls_hdr-doc_type   = 'Z001'.       ls_hdrx-doc_type   = 'X'.
+    ls_hdr-doc_type   = COND #( WHEN lv_bonif = abap_true THEN c_auart_bonif ELSE 'Z001' ).
+    ls_hdrx-doc_type  = 'X'.
     ls_hdr-sales_org  = ls_vv-vkorg.  ls_hdrx-sales_org  = 'X'.
     ls_hdr-distr_chan = ls_vv-vtweg.  ls_hdrx-distr_chan = 'X'.
     ls_hdr-division   = ls_vv-spart.  ls_hdrx-division   = 'X'.
@@ -341,10 +382,22 @@ METHOD salespole_criar_pedido.
       ls_hdrx-pymt_meth = 'X'.
     ENDIF.
 
-    " numero da ordem de compra do cliente
-    IF ls_req-ordem_compra_cliente IS NOT INITIAL.
+    IF lv_bonif = abap_true.
+
+      " bonificacao: motivo do pedido (codigo do tipo) e marca 'BONIFICAÇÃO' no lugar da ordem de compra
+      ls_hdr-ord_reason  = COND #( WHEN ls_req-tipo_bonificacao IS NOT INITIAL
+                                   THEN CONV augru( ls_req-tipo_bonificacao )
+                                   ELSE c_motivo_bonif ).
+      ls_hdrx-ord_reason = 'X'.
+      ls_hdr-purch_no_c  = c_texto_bonif.
+      ls_hdrx-purch_no_c = 'X'.
+
+    ELSEIF ls_req-ordem_compra_cliente IS NOT INITIAL.
+
+      " numero da ordem de compra do cliente
       ls_hdr-purch_no_c  = ls_req-ordem_compra_cliente.
       ls_hdrx-purch_no_c = 'X'.
+
     ENDIF.
 
     " --- parceiros: cliente (AG) e vendedor (ZV) ---
@@ -466,6 +519,21 @@ METHOD salespole_criar_pedido.
       CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
         EXPORTING
           wait = 'X'.
+
+      " bonificacao: centro de custo (codigo) direto na VBAK; sem codigo, o padrao
+      IF lv_bonif = abap_true.
+        lv_cc = COND #( WHEN ls_req-centro_custo IS NOT INITIAL THEN CONV kostl( condense( ls_req-centro_custo ) )
+                        ELSE CONV kostl( c_cc_padrao ) ).
+
+        SELECT SINGLE * FROM vbak INTO @DATA(ls_vbak_cc) WHERE vbeln = @lv_vbeln.
+        IF sy-subrc = 0.
+          ls_vbak_cc-kostl = lv_cc.
+          MODIFY vbak FROM ls_vbak_cc.
+          IF sy-subrc = 0.
+            COMMIT WORK.
+          ENDIF.
+        ENDIF.
+      ENDIF.
 
       APPEND VALUE #( ordem         = |{ lv_vbeln ALPHA = OUT }|
                       tipo_material = lv_tipo

@@ -25,6 +25,7 @@ CLASS zcl_integracao_pole_tech DEFINITION
     METHODS if_rest_resource~post REDEFINITION.
 
     METHODS salespole_vendedor.
+    METHODS salespole_vendedores.
     METHODS salespole_clientes.
     METHODS salespole_pedidos.
     METHODS salespole_itens.
@@ -42,6 +43,7 @@ CLASS zcl_integracao_pole_tech DEFINITION
   PRIVATE SECTION.
 
     TYPES: ty_t_kunnr TYPE STANDARD TABLE OF kunnr WITH EMPTY KEY,
+           ty_t_matnr TYPE STANDARD TABLE OF matnr WITH EMPTY KEY,
            BEGIN OF ty_cd,
              codigo    TYPE string,
              descricao TYPE string,
@@ -80,7 +82,17 @@ CLASS zcl_integracao_pole_tech DEFINITION
                c_origem_fv    TYPE bsark VALUE 'Z010',
                " ZPR2 = preco por CAIXA (KONV oficial: 76,59 por 1 CX). O app novo ja manda esse valor: nao divide.
                c_div_preco    TYPE i     VALUE 10,
-               c_motivo_cancel TYPE abgru VALUE '15'.
+               c_motivo_cancel TYPE abgru VALUE '15',
+               " bonificacao: tipo de pedido, motivo e centro de custo PADRAO (se o app nao mandar)
+               c_auart_bonif   TYPE auart VALUE 'Z011',
+               c_motivo_bonif  TYPE augru VALUE '115',
+               c_cc_padrao     TYPE string VALUE '2001501007',
+               c_texto_bonif   TYPE bapisdhd1-purch_no_c VALUE 'BONIFICAÇÃO',
+               " tabelas de preco 'lixo': cliente com uma delas NAO vai para a forca de vendas
+               c_pltyp_lixo_1  TYPE pltyp VALUE '33',
+               c_pltyp_lixo_2  TYPE pltyp VALUE '63',
+               " forma de pagamento ANTECIPADO (KNB1-ZWELS so com 'V'): sem credito, limite disponivel zerado
+               c_zwels_antecipado TYPE knb1-zwels VALUE 'V'.
 
     DATA: mt_meins TYPE HASHED TABLE OF ty_meins WITH UNIQUE KEY matnr,
           mt_conv  TYPE HASHED TABLE OF ty_conv  WITH UNIQUE KEY matnr kmein.
@@ -144,6 +156,14 @@ CLASS zcl_integracao_pole_tech DEFINITION
     METHODS dias_entrega
       IMPORTING iv_kunnr       TYPE kunnr
       RETURNING VALUE(rt_dias) TYPE string_table.
+
+    " Prazo MINIMO DE PRODUCAO (dias) do pedido: o MAIOR prazo entre os materiais.
+    " Mesma regra do campo estoque.prazoentregadias de /salespole/produtos:
+    "   TVARVC ZPROD_SELLENT_24 = 1 | ZPROD_SELLENT_48 = 2 | senao LADGR 0001/0006/0007 = 2, demais = 1
+    " A entrega so pode cair em um dia de entrega do cliente que seja >= hoje + este prazo.
+    METHODS prazo_producao
+      IMPORTING it_matnr       TYPE ty_t_matnr
+      RETURNING VALUE(rv_dias) TYPE i.
 
     METHODS preco_kg
       IMPORTING iv_matnr        TYPE matnr

@@ -25,6 +25,7 @@ CLASS zcl_integracao_pole_tech DEFINITION
     METHODS if_rest_resource~post REDEFINITION.
 
     METHODS salespole_vendedor.
+    METHODS salespole_vendedores.
     METHODS salespole_clientes.
     METHODS salespole_pedidos.
     METHODS salespole_itens.
@@ -42,6 +43,7 @@ CLASS zcl_integracao_pole_tech DEFINITION
   PRIVATE SECTION.
 
     TYPES: ty_t_kunnr TYPE STANDARD TABLE OF kunnr WITH EMPTY KEY,
+           ty_t_matnr TYPE STANDARD TABLE OF matnr WITH EMPTY KEY,
            BEGIN OF ty_cd,
              codigo    TYPE string,
              descricao TYPE string,
@@ -80,7 +82,17 @@ CLASS zcl_integracao_pole_tech DEFINITION
                c_origem_fv    TYPE bsark VALUE 'Z010',
                " ZPR2 = preco por CAIXA (KONV oficial: 76,59 por 1 CX). O app novo ja manda esse valor: nao divide.
                c_div_preco    TYPE i     VALUE 10,
-               c_motivo_cancel TYPE abgru VALUE '15'.
+               c_motivo_cancel TYPE abgru VALUE '15',
+               " bonificacao: tipo de pedido, motivo e centro de custo PADRAO (se o app nao mandar)
+               c_auart_bonif   TYPE auart VALUE 'Z011',
+               c_motivo_bonif  TYPE augru VALUE '115',
+               c_cc_padrao     TYPE string VALUE '2001501007',
+               c_texto_bonif   TYPE bapisdhd1-purch_no_c VALUE 'BONIFICAÇÃO',
+               " tabelas de preco 'lixo': cliente com uma delas NAO vai para a forca de vendas
+               c_pltyp_lixo_1  TYPE pltyp VALUE '33',
+               c_pltyp_lixo_2  TYPE pltyp VALUE '63',
+               " forma de pagamento ANTECIPADO (KNB1-ZWELS so com 'V'): sem credito, limite disponivel zerado
+               c_zwels_antecipado TYPE knb1-zwels VALUE 'V'.
 
     DATA: mt_meins TYPE HASHED TABLE OF ty_meins WITH UNIQUE KEY matnr,
           mt_conv  TYPE HASHED TABLE OF ty_conv  WITH UNIQUE KEY matnr kmein.
@@ -145,6 +157,14 @@ CLASS zcl_integracao_pole_tech DEFINITION
       IMPORTING iv_kunnr       TYPE kunnr
       RETURNING VALUE(rt_dias) TYPE string_table.
 
+    " Prazo MINIMO DE PRODUCAO (dias) do pedido: o MAIOR prazo entre os materiais.
+    " Mesma regra do campo estoque.prazoentregadias de /salespole/produtos:
+    "   TVARVC ZPROD_SELLENT_24 = 1 | ZPROD_SELLENT_48 = 2 | senao LADGR 0001/0006/0007 = 2, demais = 1
+    " A entrega so pode cair em um dia de entrega do cliente que seja >= hoje + este prazo.
+    METHODS prazo_producao
+      IMPORTING it_matnr       TYPE ty_t_matnr
+      RETURNING VALUE(rv_dias) TYPE i.
+
     METHODS preco_kg
       IMPORTING iv_matnr        TYPE matnr
                 iv_kmein        TYPE konp-kmein
@@ -198,6 +218,7 @@ METHOD if_rest_resource~get.
   TRY.
       CASE lv_recurso.
         WHEN 'vendedor'.        salespole_vendedor( ).
+        WHEN 'vendedores'.      salespole_vendedores( ).
         WHEN 'clientes'.        salespole_clientes( ).
         WHEN 'pedidos'.         salespole_pedidos( ).
         WHEN 'itens'.           salespole_itens( ).
@@ -511,6 +532,56 @@ METHOD dias_entrega.
 ENDMETHOD.
 
 
+METHOD prazo_producao.
+
+  " maior prazo (1 ou 2 dias) entre os materiais do pedido
+  DATA: lv_dias  TYPE i,
+        lv_ladgr TYPE marc-ladgr,
+        lv_low   TYPE tvarvc-low,
+        lv_x     TYPE tvarvc-low.
+
+  rv_dias = 1.
+
+  LOOP AT it_matnr INTO DATA(lv_matnr).
+
+    lv_low = |{ lv_matnr ALPHA = OUT }|.
+
+    SELECT SINGLE low FROM tvarvc INTO @lv_x
+      WHERE name = 'ZPROD_SELLENT_24' AND low = @lv_low.
+    IF sy-subrc = 0.
+      lv_dias = 1.
+    ELSE.
+      SELECT SINGLE low FROM tvarvc INTO @lv_x
+        WHERE name = 'ZPROD_SELLENT_48' AND low = @lv_low.
+      IF sy-subrc = 0.
+        lv_dias = 2.
+      ELSE.
+        " grupo de carregamento do primeiro centro (2002, 2014, 2015, 2100) que tiver valor
+        CLEAR lv_ladgr.
+        SELECT ladgr FROM marc
+          WHERE matnr = @lv_matnr
+            AND werks IN ( '2002', '2014', '2015', '2100' )
+            AND ladgr <> @space
+          ORDER BY werks
+          INTO @lv_ladgr UP TO 1 ROWS.
+        ENDSELECT.
+        IF lv_ladgr = '0001' OR lv_ladgr = '0006' OR lv_ladgr = '0007'.
+          lv_dias = 2.
+        ELSE.
+          lv_dias = 1.
+        ENDIF.
+      ENDIF.
+    ENDIF.
+
+    IF lv_dias > rv_dias.
+      rv_dias = lv_dias.
+    ENDIF.
+
+  ENDLOOP.
+
+ENDMETHOD.
+
+
 METHOD descrever_excecao.
 
   DATA: lx     TYPE REF TO cx_root,
@@ -543,6 +614,54 @@ METHOD descrever_excecao.
     ENDIF.
 
   ENDDO.
+
+ENDMETHOD.
+
+METHOD salespole_vendedores.
+
+  " GET /salespole/vendedores
+  " Todos os vendedores com rota vigente (codigo, nome, documento e rota).
+  " Usado pelo painel gerencial para escolher quais vendedores entram nos indicadores,
+  " mesmo sem usar o app. Nao recebe parametros.
+
+  TYPES: BEGIN OF ty_vend,
+           codvendedor TYPE string,
+           nome        TYPE string,
+           documento   TYPE string,
+           rota        TYPE string,
+         END OF ty_vend,
+         tt_vend TYPE STANDARD TABLE OF ty_vend WITH EMPTY KEY,
+
+         BEGIN OF ty_response,
+           vendedores TYPE tt_vend,
+         END OF ty_response.
+
+  DATA ls_response TYPE ty_response.
+
+  SELECT z5~lifnr,
+         z5~rota,
+         l~name1,
+         l~stcd1,
+         l~stcd2
+    FROM zsdt005 AS z5
+    INNER JOIN lfa1 AS l
+      ON l~lifnr = z5~lifnr
+    INTO TABLE @DATA(lt_rows)
+    WHERE z5~datbi >= @sy-datum.
+
+  " um vendedor aparece uma vez so (vigencia mais de uma vez na tabela de rotas)
+  SORT lt_rows BY lifnr rota.
+  DELETE ADJACENT DUPLICATES FROM lt_rows COMPARING lifnr.
+
+  LOOP AT lt_rows INTO DATA(ls_row).
+    APPEND VALUE #( codvendedor = |{ ls_row-lifnr ALPHA = OUT }|
+                    nome        = ls_row-name1
+                    documento   = COND #( WHEN ls_row-stcd1 IS NOT INITIAL THEN ls_row-stcd1 ELSE ls_row-stcd2 )
+                    rota        = ls_row-rota )
+      TO ls_response-vendedores.
+  ENDLOOP.
+
+  send_json( is_data = ls_response ).
 
 ENDMETHOD.
 
@@ -676,8 +795,12 @@ METHOD salespole_clientes.
            lista_preco          TYPE ty_cd,          " PLTYP
            rede                 TYPE ty_cd,          " grupo de clientes (KDGRP)
            tipo_estabelecimento TYPE ty_cd,
+           escritorio           TYPE ty_cd,          " KNVV-VKBUR (regras de incentivo por escritorio)
          END OF ty_area,
          tt_area TYPE STANDARD TABLE OF ty_area WITH EMPTY KEY,
+
+         " lista codigo/descricao (formas de pagamento)
+         tt_cd TYPE STANDARD TABLE OF ty_cd WITH EMPTY KEY,
 
          BEGIN OF ty_cliente,
            codigocli            TYPE string,
@@ -693,6 +816,11 @@ METHOD salespole_clientes.
            dias_entrega         TYPE string_table,   " 1=seg ... 7=dom
            classe_risco         TYPE ty_cd,
            areas                TYPE tt_area,
+           latitude             TYPE string,         " ZSDT015-LATITUTE
+           longitude            TYPE string,         " ZSDT015-LONGITUDE
+           pedido_minimo        TYPE string,         " ZSDT136-VALOR (por segmento KNVV-VERSG)
+           formas_pagamento     TYPE tt_cd,          " KNB1-ZWELS (uma letra = uma forma) + T042Z
+           pagamento_antecipado TYPE string,         " 'true' = forma de pagamento so 'V': sem credito (limite zerado)
          END OF ty_cliente,
          tt_cliente TYPE STANDARD TABLE OF ty_cliente WITH EMPTY KEY,
 
@@ -705,7 +833,11 @@ METHOD salespole_clientes.
         lt_txt      TYPE ty_t_txt,
         lt_pai      TYPE ty_t_kunnr,
         lv_vant     TYPE vkorg,
-        lv_delta    TYPE knkk-klimk.
+        lv_delta    TYPE knkk-klimk,
+        lv_versg    TYPE knvv-versg,
+        lv_letra    TYPE c LENGTH 1,
+        lv_off      TYPE i,
+        lv_antecipado TYPE abap_bool.
 
   resolve_clientes( IMPORTING et_kunnr = DATA(lt_kunnr) ).
 
@@ -723,7 +855,7 @@ METHOD salespole_clientes.
     FOR ALL ENTRIES IN @lt_kunnr
     WHERE kunnr = @lt_kunnr-table_line.
 
-  SELECT kunnr, vkorg, vtweg, spart, zterm, versg, kdgrp, pltyp, vwerk
+  SELECT kunnr, vkorg, vtweg, spart, zterm, versg, kdgrp, pltyp, vwerk, vkbur
     FROM knvv
     INTO TABLE @DATA(lt_knvv)
     FOR ALL ENTRIES IN @lt_kunnr
@@ -741,7 +873,8 @@ METHOD salespole_clientes.
     FROM knkk
     INTO TABLE @DATA(lt_knkk)
     FOR ALL ENTRIES IN @lt_kunnr
-    WHERE kunnr = @lt_kunnr-table_line.
+    WHERE kunnr = @lt_kunnr-table_line
+    AND crblb EQ @space.
 
   " conta-mae de credito (limite total do grupo)
   lt_pai = VALUE #( FOR w IN lt_knkk WHERE ( knkli IS NOT INITIAL ) ( w-knkli ) ).
@@ -756,6 +889,33 @@ METHOD salespole_clientes.
       WHERE kunnr = @lt_pai-table_line.
     APPEND LINES OF lt_knkk_pai TO lt_knkk.
   ENDIF.
+
+  " ------------------------------------------------------------------
+  " Latitude/longitude, pedido minimo e formas de pagamento
+  " ------------------------------------------------------------------
+  SELECT kunnr, latitute, longitude
+    FROM zsdt015
+    INTO TABLE @DATA(lt_z015)
+    FOR ALL ENTRIES IN @lt_kunnr
+    WHERE kunnr = @lt_kunnr-table_line.
+
+  SELECT segmento, valor FROM zsdt136 INTO TABLE @DATA(lt_z136).
+
+  " KNB1 tem uma linha por empresa; juntamos as formas de todas elas
+  SELECT kunnr, zwels
+    FROM knb1
+    INTO TABLE @DATA(lt_knb1)
+    FOR ALL ENTRIES IN @lt_kunnr
+    WHERE kunnr = @lt_kunnr-table_line.
+
+  SELECT zlsch, text1 FROM t042z INTO TABLE @DATA(lt_t042z) WHERE land1 = 'BR'.
+
+  SORT lt_z015 BY kunnr.
+  DELETE ADJACENT DUPLICATES FROM lt_z015 COMPARING kunnr.
+  SORT lt_z136 BY segmento.
+  DELETE ADJACENT DUPLICATES FROM lt_z136 COMPARING segmento.
+  SORT lt_knb1 BY kunnr.
+  SORT lt_t042z BY zlsch.
 
   SORT lt_kna1 BY kunnr.
   SORT lt_knvv BY kunnr vkorg vtweg spart.
@@ -773,6 +933,7 @@ METHOD salespole_clientes.
   SELECT kdgrp, ktext FROM t151t INTO TABLE @DATA(lt_t151t) WHERE spras = @c_lang.
   SELECT kkber, ctlpc, rtext FROM t691t INTO TABLE @DATA(lt_t691t) WHERE spras = @c_lang.
   SELECT pltyp, ptext FROM t189t INTO TABLE @DATA(lt_t189t) WHERE spras = @c_lang.
+  SELECT vkbur, bezei FROM tvkbt INTO TABLE @DATA(lt_tvkbt) WHERE spras = @c_lang.
 
   lt_txt = VALUE #( BASE lt_txt FOR a IN lt_tvzbt ( tipo = 'ZTERM' codigo = a-zterm descricao = a-vtext ) ).
   lt_txt = VALUE #( BASE lt_txt FOR b IN lt_tvtwt ( tipo = 'VTWEG' codigo = b-vtweg descricao = b-vtext ) ).
@@ -781,6 +942,7 @@ METHOD salespole_clientes.
   lt_txt = VALUE #( BASE lt_txt FOR e IN lt_t151t ( tipo = 'KDGRP' codigo = e-kdgrp descricao = e-ktext ) ).
   lt_txt = VALUE #( BASE lt_txt FOR f IN lt_t691t ( tipo = 'CTLPC' codigo = |{ f-kkber }{ f-ctlpc }| descricao = f-rtext ) ).
   lt_txt = VALUE #( BASE lt_txt FOR g IN lt_t189t ( tipo = 'PLTYP' codigo = g-pltyp descricao = g-ptext ) ).
+  lt_txt = VALUE #( BASE lt_txt FOR h IN lt_tvkbt ( tipo = 'VKBUR' codigo = h-vkbur descricao = h-bezei ) ).
   SORT lt_txt BY tipo codigo.
 
   " ------------------------------------------------------------------
@@ -794,7 +956,7 @@ METHOD salespole_clientes.
 
   LOOP AT lt_kunnr INTO DATA(lv_kunnr).
 
-    CLEAR: ls_cli, ls_kna1, ls_knvv, ls_z111, ls_knkk, ls_knkkp, lv_vant.
+    CLEAR: ls_cli, ls_kna1, ls_knvv, ls_z111, ls_knkk, ls_knkkp, lv_vant, lv_versg, lv_antecipado.
 
     READ TABLE lt_kna1 INTO ls_kna1 WITH KEY kunnr = lv_kunnr BINARY SEARCH.
     IF sy-subrc <> 0.
@@ -822,10 +984,17 @@ METHOD salespole_clientes.
       ENDIF.
       lv_vant = ls_knvv-vkorg.
 
+      " segmento do cliente (define o pedido minimo): o da primeira area
+      IF lv_versg IS INITIAL.
+        lv_versg = ls_knvv-versg.
+      ENDIF.
+
       APPEND VALUE #(
         vkorg                = ls_knvv-vkorg
         tipo_material        = tipo_da_org( ls_knvv-vkorg )
         centro               = ls_knvv-vwerk
+        escritorio           = VALUE #( codigo    = ls_knvv-vkbur
+                                        descricao = lookup_txt( it_txt = lt_txt iv_tipo = 'VKBUR' iv_cod = ls_knvv-vkbur ) )
         cond_pagamento       = VALUE #( codigo    = ls_knvv-zterm
                                         descricao = lookup_txt( it_txt = lt_txt iv_tipo = 'ZTERM' iv_cod = ls_knvv-zterm ) )
         canal                = VALUE #( codigo    = ls_knvv-vtweg
@@ -840,6 +1009,59 @@ METHOD salespole_clientes.
                                         descricao = lookup_txt( it_txt = lt_txt iv_tipo = 'PLTYP' iv_cod = ls_knvv-pltyp ) ) )
         TO ls_cli-areas.
 
+    ENDLOOP.
+
+    " cliente com tabela de preco 'lixo' (33 ou 63) nao vai para a forca de vendas (mesma regra do get_financeiro_cli)
+    DATA(lv_ignorar) = abap_false.
+    LOOP AT ls_cli-areas INTO DATA(ls_ar_chk).
+      IF ls_ar_chk-lista_preco-codigo = c_pltyp_lixo_1 OR ls_ar_chk-lista_preco-codigo = c_pltyp_lixo_2.
+        lv_ignorar = abap_true.
+        EXIT.
+      ENDIF.
+    ENDLOOP.
+    IF lv_ignorar = abap_true.
+      CONTINUE.
+    ENDIF.
+
+    " --- latitude / longitude ---
+    " LATITUTE/LONGITUDE sao CHAR no SAP: vao como texto (o sinal '-' ja vem no valor).
+    READ TABLE lt_z015 INTO DATA(ls_z015) WITH KEY kunnr = lv_kunnr BINARY SEARCH.
+    IF sy-subrc = 0.
+      ls_cli-latitude  = |{ ls_z015-latitute }|.
+      ls_cli-longitude = |{ ls_z015-longitude }|.
+      CONDENSE ls_cli-latitude NO-GAPS.
+      CONDENSE ls_cli-longitude NO-GAPS.
+    ENDIF.
+
+    " --- pedido minimo (por segmento do cliente) ---
+    IF lv_versg IS NOT INITIAL.
+      READ TABLE lt_z136 INTO DATA(ls_z136) WITH KEY segmento = lv_versg BINARY SEARCH.
+      IF sy-subrc = 0.
+        ls_cli-pedido_minimo = |{ ls_z136-valor DECIMALS = 2 }|.
+      ENDIF.
+    ENDIF.
+
+    " --- formas de pagamento: cada letra de KNB1-ZWELS e uma forma; texto na T042Z ---
+    LOOP AT lt_knb1 INTO DATA(ls_knb1) WHERE kunnr = lv_kunnr.
+      " forma de pagamento so 'V' (campo inteiro, como no get_financeiro_cli) = pagamento ANTECIPADO
+      IF ls_knb1-zwels = c_zwels_antecipado.
+        lv_antecipado = abap_true.
+      ENDIF.
+      DO strlen( ls_knb1-zwels ) TIMES.
+        lv_off   = sy-index - 1.
+        lv_letra = ls_knb1-zwels+lv_off(1).
+        IF lv_letra IS INITIAL.
+          CONTINUE.
+        ENDIF.
+        " a mesma forma pode vir de varias empresas: so uma vez
+        IF line_exists( ls_cli-formas_pagamento[ codigo = lv_letra ] ).
+          CONTINUE.
+        ENDIF.
+        READ TABLE lt_t042z INTO DATA(ls_t042z) WITH KEY zlsch = lv_letra BINARY SEARCH.
+        APPEND VALUE #( codigo    = lv_letra
+                        descricao = COND #( WHEN sy-subrc = 0 THEN ls_t042z-text1 ) )
+          TO ls_cli-formas_pagamento.
+      ENDDO.
     ENDLOOP.
 
     " --- dias de entrega (1=seg ... 7=dom) ---
@@ -881,7 +1103,7 @@ METHOD salespole_clientes.
       CALL FUNCTION 'CREDIT_EXPOSURE'
         EXPORTING
           kkber                = ls_knkk-kkber
-          kunnr                = ls_knkk-kunnr
+          kunnr                = ls_knkk-knkli
           date_credit_exposure = sy-datum
         IMPORTING
           delta_to_limit       = lv_delta
@@ -895,6 +1117,14 @@ METHOD salespole_clientes.
 
     ENDIF.
 
+    " pagamento ANTECIPADO: nao ha credito, o limite disponivel e ZERO (regra do get_financeiro_cli)
+    IF lv_antecipado = abap_true.
+      ls_cli-limite_disponivel = '0.00'.
+      ls_cli-pagamento_antecipado = 'true'.
+    ELSE.
+      ls_cli-pagamento_antecipado = 'false'.
+    ENDIF.
+
     APPEND ls_cli TO ls_response-clientes.
 
   ENDLOOP.
@@ -905,8 +1135,11 @@ ENDMETHOD.
 
 METHOD salespole_pedidos.
 
-  " GET /salespole/pedidos?codvendedor=[&codigocli=][&datain=][&datafim=][&dtentrega=]
+  " GET /salespole/pedidos?codvendedor=[&codigocli=][&datain=][&datafim=][&dtentrega=][&ordens=]
   "   - sem filtros de data: ultimos 90 dias de criacao
+  "   - ordens (ou ordem): 1 a 50 numeros de ordem separados por virgula. Devolve SO elas (qualquer data), na hora,
+  "     sem varrer a carteira: usado quando o vendedor abre uma ordem que acabou de criar. Continua valendo a
+  "     carteira: ordem de cliente de outro vendedor nao volta.
   "   - dtentrega: pedidos da carteira com data de remessa naquele dia
   "     (qualquer data de criacao) -> tela "remessas de hoje"
   " Sem SUBMIT zsdr124 (a ZSDT139 deve ser alimentada por job).
@@ -959,6 +1192,7 @@ METHOD salespole_pedidos.
         lr_auart    TYPE RANGE OF vbak-auart,
         lr_erdat    TYPE RANGE OF vbak-erdat,
         lr_vdatu    TYPE RANGE OF vbak-vdatu,
+        lr_vbeln    TYPE RANGE OF vbak-vbeln,
         lv_nf       TYPE string,
         lv_serie    TYPE string,
         lv_tem_fat  TYPE abap_bool,
@@ -977,6 +1211,27 @@ METHOD salespole_pedidos.
   DATA(lv_fim) = parse_data( mo_request->get_uri_query_parameter( 'datafim' ) ).
   DATA(lv_ent) = parse_data( mo_request->get_uri_query_parameter( 'dtentrega' ) ).
 
+  " ordens especificas: resposta imediata, sem varrer a carteira por data
+  DATA(lv_ordens) = mo_request->get_uri_query_parameter( 'ordens' ).
+  IF lv_ordens IS INITIAL.
+    lv_ordens = mo_request->get_uri_query_parameter( 'ordem' ).
+  ENDIF.
+
+  IF lv_ordens IS NOT INITIAL.
+    SPLIT lv_ordens AT ',' INTO TABLE DATA(lt_txt_ord).
+    LOOP AT lt_txt_ord INTO DATA(lv_o).
+      CONDENSE lv_o.
+      IF lv_o IS NOT INITIAL.
+        APPEND VALUE #( sign = 'I' option = 'EQ' low = CONV vbak-vbeln( |{ lv_o ALPHA = IN WIDTH = 10 }| ) ) TO lr_vbeln.
+      ENDIF.
+    ENDLOOP.
+
+    IF lr_vbeln IS INITIAL OR lines( lr_vbeln ) > 50.
+      send_error( iv_status = 400 iv_msg = 'Informe de 1 a 50 ordens' ).
+      RETURN.
+    ENDIF.
+  ENDIF.
+
   IF lv_ini IS INITIAL.
     lv_ini = sy-datum - 90.
   ENDIF.
@@ -984,7 +1239,10 @@ METHOD salespole_pedidos.
     lv_fim = sy-datum.
   ENDIF.
 
-  IF lv_ent IS NOT INITIAL.
+  IF lr_vbeln IS NOT INITIAL.
+    " por numero de ordem: qualquer data (os ranges de data ficam vazios = sem restricao)
+    CLEAR: lr_erdat, lr_vdatu.
+  ELSEIF lv_ent IS NOT INITIAL.
     lr_vdatu = VALUE #( ( sign = 'I' option = 'EQ' low = lv_ent ) ).
   ELSE.
     lr_erdat = VALUE #( ( sign = 'I' option = 'BT' low = lv_ini high = lv_fim ) ).
@@ -1003,6 +1261,7 @@ METHOD salespole_pedidos.
     WHERE kunnr = @lt_kunnr-table_line
       AND erdat IN @lr_erdat
       AND vdatu IN @lr_vdatu
+      AND vbeln IN @lr_vbeln
       AND auart IN @lr_auart.
 
   IF lt_vbak IS INITIAL.
@@ -1633,14 +1892,15 @@ ENDMETHOD.
 METHOD salespole_produtos.
 
   " GET /salespole/produtos
-  " Cadastro de produtos (sem preco: preco vem de /salespole/precos).
+  " Cadastro de produtos lido DIRETO do SAP (MARA, MAKT, MARC, MARM, T006A, ZSDT129-132, TVARVC),
+  " sem passar pela tabela intermediaria ZFV_PRODUTO.
+  " Sem preco (vem de /salespole/precos) e sem estoque (vem de /salespole/estoque).
   " Unidades: o codigo INTERNO (MARM-MEINH, ex.: KI) e o que vai no pedido; o TEXTO (T006A, ex.: CX)
   " e o que o vendedor le. A caixa e a unidade da MARM cujo texto e 'CX' (c_texto_caixa); sem ela,
   " unidade_venda = unidade base.
   " conversoes = unidades alternativas da MARM, com o fator em UNIDADES BASE por 1 unidade
   " (UMREZ/UMREN). O app usa isso para o preco por caixa, o estoque em caixas e o minimo/multiplo.
-  " ZFV_PRODUTO guarda price_table/price na mesma linha, entao deduplicamos
-  " por product_id.
+  " pedido.multiplo = fator da unidade de venda (1 caixa em unidade base), como o get_fv_produto fazia.
 
   TYPES: BEGIN OF ty_estoque,
            disponivelecommerce TYPE string,
@@ -1658,10 +1918,14 @@ METHOD salespole_produtos.
          END OF ty_pedido,
 
          BEGIN OF ty_classificacao,
-           marca     TYPE string,
+           marca     TYPE string,        " MARA-NORMT (texto: a marca nao tem ID)
            categoria TYPE string,
            linha     TYPE string,
            grupo     TYPE string,
+           " IDs do cadastro (ZSDT129 -> ZSDT130/131/132): as regras de incentivo do painel usam o ID
+           categoria_id TYPE string,
+           linha_id     TYPE string,
+           grupo_id     TYPE string,
          END OF ty_classificacao,
 
          BEGIN OF ty_conv,
@@ -1698,40 +1962,64 @@ METHOD salespole_produtos.
 
   DATA: ls_response TYPE ty_response,
         ls_produto  TYPE ty_produto,
-        lt_matnr    TYPE STANDARD TABLE OF matnr WITH EMPTY KEY.
+        lv_caixa    TYPE marm-meinh,
+        lv_ncm      TYPE marc-steuc,
+        lv_ladgr    TYPE marc-ladgr,
+        lv_codigo   TYPE string,
+        lv_fator    TYPE decfloat34.
 
-  SELECT *
-    FROM zfv_produto
-    INTO TABLE @DATA(lt_prod).
+  " ------------------------------------------------------------------
+  " Universo: materiais vendaveis (mesmos filtros do get_fv_produto:
+  " tipo FERT/HAWA/ZVAR e sem bloqueio de status geral MSTAV), sem marca de eliminacao.
+  " AJUSTAR: se o seu gr_mtart do get_fv_produto tiver outros tipos, inclua aqui.
+  " ------------------------------------------------------------------
+  SELECT matnr, mtart, meins, ean11, mhdhb, normt, ntgew, brgew
+    FROM mara
+    INTO TABLE @DATA(lt_mara)
+    WHERE mtart IN ( @c_mtart_fert, @c_mtart_hawa, @c_mtart_zvar )
+      AND mstav = @space
+      AND lvorm = @space.
 
-  SORT lt_prod BY product_id.
-  DELETE ADJACENT DUPLICATES FROM lt_prod COMPARING product_id.
-
-  IF lt_prod IS INITIAL.
+  IF lt_mara IS INITIAL.
     send_json( is_data = ls_response ).
     RETURN.
   ENDIF.
 
-  lt_matnr = VALUE #( FOR a IN lt_prod ( CONV matnr( |{ a-product_id ALPHA = IN WIDTH = 18 }| ) ) ).
-  SORT lt_matnr.
-  DELETE ADJACENT DUPLICATES FROM lt_matnr.
+  " ------------------------------------------------------------------
+  " Leituras em lote
+  " ------------------------------------------------------------------
+  SELECT matnr, maktx
+    FROM makt
+    INTO TABLE @DATA(lt_makt)
+    FOR ALL ENTRIES IN @lt_mara
+    WHERE matnr = @lt_mara-matnr
+      AND spras = @c_lang.
 
-  SELECT matnr, mhdhb, normt, mtart, meins
-    FROM mara
-    INTO TABLE @DATA(lt_mara)
-    FOR ALL ENTRIES IN @lt_matnr
-    WHERE matnr = @lt_matnr-table_line.
-
-  SORT lt_mara BY matnr.
-
-  " conversoes de unidade (em lote, uma leitura so)
+  " conversoes de unidade
   SELECT matnr, meinh, umrez, umren
     FROM marm
     INTO TABLE @DATA(lt_marm)
-    FOR ALL ENTRIES IN @lt_matnr
-    WHERE matnr = @lt_matnr-table_line.
+    FOR ALL ENTRIES IN @lt_mara
+    WHERE matnr = @lt_mara-matnr.
 
-  SORT lt_marm BY matnr meinh.
+  " NCM e grupo de carregamento (LADGR), nos mesmos centros do get_fv_produto
+  SELECT matnr, werks, ladgr, steuc
+    FROM marc
+    INTO TABLE @DATA(lt_marc)
+    FOR ALL ENTRIES IN @lt_mara
+    WHERE matnr = @lt_mara-matnr
+      AND werks IN ( '2002', '2014', '2015', '2100' ).
+
+  " categoria / linha / grupo do SKU (IDs) e o texto de cada ID
+  SELECT matnr, categoria, linha, grupo
+    FROM zsdt129
+    INTO TABLE @DATA(lt_z129)
+    FOR ALL ENTRIES IN @lt_mara
+    WHERE matnr = @lt_mara-matnr.
+
+  SELECT id, categoria AS texto FROM zsdt130 INTO TABLE @DATA(lt_cat).
+  SELECT id, linha     AS texto FROM zsdt131 INTO TABLE @DATA(lt_lin).
+  SELECT id, grupo     AS texto FROM zsdt132 INTO TABLE @DATA(lt_grp).
 
   " textos externos das unidades (tabela pequena, lida inteira)
   SELECT msehi, mseh3
@@ -1739,27 +2027,73 @@ METHOD salespole_produtos.
     INTO TABLE @DATA(lt_t006a)
     WHERE spras = @c_lang.
 
-  SORT lt_t006a BY msehi.
+  " produtos com prazo de entrega fixo (24h / 48h)
+  SELECT name, low
+    FROM tvarvc
+    INTO TABLE @DATA(lt_tvarvc)
+    WHERE name IN ( 'ZPROD_SELLENT_24', 'ZPROD_SELLENT_48' ).
 
-  DATA: ls_mara  LIKE LINE OF lt_mara,
+  SORT lt_mara   BY matnr.
+  SORT lt_makt   BY matnr.
+  SORT lt_marm   BY matnr meinh.
+  SORT lt_marc   BY matnr werks.
+  SORT lt_z129   BY matnr.
+  SORT lt_cat    BY id.
+  SORT lt_lin    BY id.
+  SORT lt_grp    BY id.
+  SORT lt_t006a  BY msehi.
+  SORT lt_tvarvc BY name low.
+
+  DATA: ls_makt  LIKE LINE OF lt_makt,
+        ls_marm  LIKE LINE OF lt_marm,
+        ls_marc  LIKE LINE OF lt_marc,
+        ls_z129  LIKE LINE OF lt_z129,
+        ls_cat   LIKE LINE OF lt_cat,
+        ls_lin   LIKE LINE OF lt_lin,
+        ls_grp   LIKE LINE OF lt_grp,
         ls_t006a LIKE LINE OF lt_t006a,
-        lv_caixa TYPE marm-meinh.
+        lv_low   TYPE tvarvc-low.
 
-  LOOP AT lt_prod INTO DATA(wa_prod).
+  " ------------------------------------------------------------------
+  " Montagem
+  " ------------------------------------------------------------------
+  LOOP AT lt_mara INTO DATA(ls_mara).
 
-    CLEAR: ls_produto, ls_mara.
+    CLEAR: ls_produto, lv_caixa, lv_ncm, lv_ladgr, ls_makt, ls_z129.
 
-    DATA(lv_matnr) = CONV matnr( |{ wa_prod-product_id ALPHA = IN WIDTH = 18 }| ).
-    READ TABLE lt_mara INTO ls_mara WITH KEY matnr = lv_matnr BINARY SEARCH.
+    lv_codigo = |{ ls_mara-matnr ALPHA = OUT }|.
 
-    ls_produto-codigoproduto = |{ lv_matnr ALPHA = OUT }|.
-    ls_produto-descricao     = wa_prod-product_desc.
-    ls_produto-tipo          = wa_prod-type.
-    ls_produto-unidade       = wa_prod-unit.
-    ls_produto-ean           = wa_prod-ean.
-    ls_produto-ncm           = wa_prod-ncm.
-    ls_produto-validade      = ls_mara-mhdhb.
+    READ TABLE lt_makt INTO ls_makt WITH KEY matnr = ls_mara-matnr BINARY SEARCH.
+
+    " NCM e LADGR: o primeiro centro (2002, 2014, 2015, 2100) que tiver valor
+    READ TABLE lt_marc TRANSPORTING NO FIELDS WITH KEY matnr = ls_mara-matnr BINARY SEARCH.
+    IF sy-subrc = 0.
+      LOOP AT lt_marc INTO ls_marc FROM sy-tabix.
+        IF ls_marc-matnr <> ls_mara-matnr.
+          EXIT.
+        ENDIF.
+        IF lv_ncm IS INITIAL AND ls_marc-steuc IS NOT INITIAL.
+          lv_ncm = ls_marc-steuc.
+        ENDIF.
+        IF lv_ladgr IS INITIAL AND ls_marc-ladgr IS NOT INITIAL.
+          lv_ladgr = ls_marc-ladgr.
+        ENDIF.
+      ENDLOOP.
+    ENDIF.
+
+    ls_produto-codigoproduto = lv_codigo.
+    ls_produto-descricao     = ls_makt-maktx.
+    " grupo de carregamento 0007 = produto de peso variavel: o tipo vai como ZVAR (regra do get_fv_produto)
+    ls_produto-tipo          = COND #( WHEN lv_ladgr = '0007' THEN c_mtart_zvar ELSE ls_mara-mtart ).
+    ls_produto-ean           = ls_mara-ean11.
+    ls_produto-ncm           = lv_ncm.
+    ls_produto-validade      = COND #( WHEN ls_mara-mhdhb > 0 THEN |{ ls_mara-mhdhb }| ).
     ls_produto-tipo_material = ls_mara-mtart.
+
+    " unidade do cadastro: 'UN' quando o material tem UN na MARM; senao a unidade base
+    READ TABLE lt_marm TRANSPORTING NO FIELDS WITH KEY matnr = ls_mara-matnr meinh = 'UN' BINARY SEARCH.
+    ls_produto-unidade = COND #( WHEN sy-subrc = 0 THEN 'UN' ELSE ls_mara-meins ).
+
     ls_produto-unidade_base = ls_mara-meins.
 
     CLEAR ls_t006a.
@@ -1767,26 +2101,32 @@ METHOD salespole_produtos.
     ls_produto-unidade_base_texto = ls_t006a-mseh3.
 
     " conversoes da MARM com o texto de cada unidade; a CAIXA e a que tem o texto 'CX'
-    CLEAR lv_caixa.
-    LOOP AT lt_marm INTO DATA(ls_marm) WHERE matnr = lv_matnr.
+    READ TABLE lt_marm TRANSPORTING NO FIELDS WITH KEY matnr = ls_mara-matnr BINARY SEARCH.
+    IF sy-subrc = 0.
+      LOOP AT lt_marm INTO ls_marm FROM sy-tabix.
 
-      IF ls_marm-umren = 0.
-        CONTINUE.
-      ENDIF.
+        IF ls_marm-matnr <> ls_mara-matnr.
+          EXIT.
+        ENDIF.
 
-      CLEAR ls_t006a.
-      READ TABLE lt_t006a INTO ls_t006a WITH KEY msehi = ls_marm-meinh BINARY SEARCH.
+        IF ls_marm-umren = 0.
+          CONTINUE.
+        ENDIF.
 
-      APPEND VALUE #( unidade = ls_marm-meinh
-                      texto   = ls_t006a-mseh3
-                      fator   = |{ CONV decfloat34( ls_marm-umrez ) / ls_marm-umren DECIMALS = 6 }| )
-        TO ls_produto-conversoes.
+        CLEAR ls_t006a.
+        READ TABLE lt_t006a INTO ls_t006a WITH KEY msehi = ls_marm-meinh BINARY SEARCH.
 
-      IF lv_caixa IS INITIAL AND ls_t006a-mseh3 = c_texto_caixa.
-        lv_caixa = ls_marm-meinh.
-      ENDIF.
+        APPEND VALUE #( unidade = ls_marm-meinh
+                        texto   = ls_t006a-mseh3
+                        fator   = |{ CONV decfloat34( ls_marm-umrez ) / ls_marm-umren DECIMALS = 6 }| )
+          TO ls_produto-conversoes.
 
-    ENDLOOP.
+        IF lv_caixa IS INITIAL AND ls_t006a-mseh3 = c_texto_caixa.
+          lv_caixa = ls_marm-meinh.
+        ENDIF.
+
+      ENDLOOP.
+    ENDIF.
 
     " o pedido e feito em CAIXA; sem unidade de caixa na MARM usa a unidade base
     ls_produto-unidade_venda = COND #( WHEN lv_caixa IS NOT INITIAL THEN lv_caixa ELSE ls_mara-meins ).
@@ -1795,17 +2135,66 @@ METHOD salespole_produtos.
     READ TABLE lt_t006a INTO ls_t006a WITH KEY msehi = ls_produto-unidade_venda BINARY SEARCH.
     ls_produto-unidade_venda_texto = ls_t006a-mseh3.
 
-    ls_produto-estoque-disponivelecommerce = wa_prod-allow_ecommerce.
-    ls_produto-estoque-prazoentregadias    = wa_prod-prevision_days_delivery.
-    ls_produto-peso-pesoliquido            = wa_prod-weight_net.
-    ls_produto-peso-pesobruto              = wa_prod-weight_gross.
-    ls_produto-pedido-quantidademinima     = wa_prod-minimum.
-    ls_produto-pedido-multiplo             = wa_prod-mutiple.
+    " multiplo do pedido = 1 unidade de venda (caixa) em UNIDADE BASE (ex.: caixa de 14 KG -> 14)
+    READ TABLE lt_marm INTO ls_marm WITH KEY matnr = ls_mara-matnr meinh = ls_produto-unidade_venda BINARY SEARCH.
+    IF sy-subrc = 0 AND ls_marm-umren <> 0.
+      lv_fator = CONV decfloat34( ls_marm-umrez ) / ls_marm-umren.
+      ls_produto-pedido-multiplo = |{ lv_fator DECIMALS = 3 }|.
+    ENDIF.
 
-    ls_produto-classificacao-marca     = ls_mara-normt.
-    ls_produto-classificacao-categoria = wa_prod-category.
-    ls_produto-classificacao-linha     = wa_prod-linha.
-    ls_produto-classificacao-grupo     = wa_prod-grupo.
+    " quantidade minima: o get_fv_produto nunca preencheu (campo MINIMUM). Fica vazio = sem regra.
+    " AJUSTAR: se existir regra de minimo por produto no SAP (ex.: MVKE-AUMNG), leia aqui.
+
+    " peso real do material (o get_fv_produto gravava o FATOR de unidade nesse campo)
+    IF ls_mara-ntgew > 0.
+      ls_produto-peso-pesoliquido = |{ ls_mara-ntgew DECIMALS = 3 }|.
+    ENDIF.
+    IF ls_mara-brgew > 0.
+      ls_produto-peso-pesobruto = |{ ls_mara-brgew DECIMALS = 3 }|.
+    ENDIF.
+
+    " prazo de entrega (dias), igual ao get_fv_produto:
+    "   na lista de 24h (TVARVC ZPROD_SELLENT_24) = 1 | na de 48h (ZPROD_SELLENT_48) = 2
+    "   senao, grupo de carregamento 0001/0006/0007 = 2, demais = 1
+    lv_low = lv_codigo.
+    READ TABLE lt_tvarvc TRANSPORTING NO FIELDS WITH KEY name = 'ZPROD_SELLENT_24' low = lv_low BINARY SEARCH.
+    IF sy-subrc = 0.
+      ls_produto-estoque-prazoentregadias = '1'.
+    ELSE.
+      READ TABLE lt_tvarvc TRANSPORTING NO FIELDS WITH KEY name = 'ZPROD_SELLENT_48' low = lv_low BINARY SEARCH.
+      IF sy-subrc = 0.
+        ls_produto-estoque-prazoentregadias = '2'.
+      ELSEIF lv_ladgr = '0001' OR lv_ladgr = '0006' OR lv_ladgr = '0007'.
+        ls_produto-estoque-prazoentregadias = '2'.
+      ELSE.
+        ls_produto-estoque-prazoentregadias = '1'.
+      ENDIF.
+    ENDIF.
+
+    " disponibilidade e-commerce: o get_fv_produto nunca preencheu (ALLOW_ECOMMERCE). Fica vazio.
+    " AJUSTAR: se existir essa regra no SAP, preencha aqui (o app nao usa hoje).
+
+    " classificacao
+    ls_produto-classificacao-marca = ls_mara-normt.
+
+    READ TABLE lt_z129 INTO ls_z129 WITH KEY matnr = ls_mara-matnr BINARY SEARCH.
+    IF sy-subrc = 0.
+      ls_produto-classificacao-categoria_id = ls_z129-categoria.
+      ls_produto-classificacao-linha_id     = ls_z129-linha.
+      ls_produto-classificacao-grupo_id     = ls_z129-grupo.
+      READ TABLE lt_cat INTO ls_cat WITH KEY id = ls_z129-categoria BINARY SEARCH.
+      IF sy-subrc = 0.
+        ls_produto-classificacao-categoria = ls_cat-texto.
+      ENDIF.
+      READ TABLE lt_lin INTO ls_lin WITH KEY id = ls_z129-linha BINARY SEARCH.
+      IF sy-subrc = 0.
+        ls_produto-classificacao-linha = ls_lin-texto.
+      ENDIF.
+      READ TABLE lt_grp INTO ls_grp WITH KEY id = ls_z129-grupo BINARY SEARCH.
+      IF sy-subrc = 0.
+        ls_produto-classificacao-grupo = ls_grp-texto.
+      ENDIF.
+    ENDIF.
 
     APPEND ls_produto TO ls_response-produtos.
 
@@ -2329,14 +2718,25 @@ METHOD salespole_criar_pedido.
   "   "itens": [ { "produto": "1234", "unidade": "CX", "quantidade": "10", "preco": "" } ]
   " }
   "
-  " Somente Z001. Centro (plant) e deposito (lgort) NAO sao enviados: o SAP
-  " determina, como no app atual.
+  " Tipos: venda = Z001 | bonificacao = Z011 (tipo = 'bonificacao'). Centro (plant) e deposito (lgort)
+  " NAO sao enviados: o SAP determina, como no app atual.
   "
-  " DATA DE ENTREGA: proxima data de entrega do cliente (ZSDT111) estritamente
-  " depois da compra. Base = a maior entre dt_criacao e hoje (pedido criado
+  " BONIFICACAO (so chega aqui DEPOIS de aprovada no painel): tipo_bonificacao = CODIGO do tipo
+  " (ORD_REASON, 3 posicoes; padrao 115) e centro_custo = CODIGO do centro de custo (KOSTL, 10 posicoes;
+  " padrao 2001501007). O app manda so o codigo (a descricao fica no cadastro do painel).
+  " PURCH_NO_C = 'BONIFICAÇÃO'. O centro de custo e gravado direto na VBAK (MODIFY vbak), como no post_pedido atual.
+  " A justificativa NAO vem para o SAP: fica so no Supabase, para quem aprova.
+  "
+  " DATA DE ENTREGA: primeiro dia de entrega do cliente (ZSDT111) que respeite o
+  " PRAZO DE PRODUCAO do pedido: base + maior prazo (1 ou 2 dias) entre os itens
+  " (ver prazo_producao). Base = a maior entre dt_criacao e hoje (pedido criado
   " offline e sincronizado depois nao pode ficar com data no passado). Se o app
   " mandar dt_entrega, ela precisa cair num dia de entrega do cliente e ser
-  " posterior a base; senao 422. A data usada volta na resposta.
+  " >= base + prazo; senao 422. A data usada volta na resposta.
+  "
+  " CORTE E FERIADOS (decididos pela API, que manda os dois campos):
+  "   apos_corte = 'true'  -> pedido feito depois das 17h (Sao Paulo) conta como do DIA SEGUINTE
+  "   feriados   = [AAAA-MM-DD] -> feriados nacionais/do estado/da cidade do cliente: a entrega nunca cai neles
   "
   " SPLIT: o pedido do app vira ate 2 ordens no SAP, uma por tipo de material
   "   FERT       -> organizacao 2100/2002
@@ -2371,6 +2771,11 @@ METHOD salespole_criar_pedido.
            ordem_compra_cliente TYPE string,
            endereco_entrega TYPE string,
            observacao     TYPE string,
+           tipo           TYPE string,        " venda (padrao) | bonificacao
+           tipo_bonificacao TYPE string,      " ORD_REASON (so bonificacao)
+           centro_custo   TYPE string,        " KOSTL (so bonificacao)
+           apos_corte     TYPE string,        " 'true' = feito depois da hora de corte (conta como dia seguinte)
+           feriados       TYPE string_table,  " AAAA-MM-DD: dias em que nao ha entrega para este cliente
            itens          TYPE tt_item_req,
          END OF ty_req,
 
@@ -2432,6 +2837,10 @@ METHOD salespole_criar_pedido.
         lt_return  TYPE STANDARD TABLE OF bapiret2,
         lt_dias    TYPE string_table,
         lv_base    TYPE d,
+        lv_bonif   TYPE abap_bool,
+        lv_cc      TYPE kostl,
+        lv_prazo   TYPE i,
+        lv_minima  TYPE d,
         lv_refd    TYPE d VALUE '19000101',   " uma segunda-feira
         lv_dia     TYPE string,
         lv_txt     TYPE string,
@@ -2449,6 +2858,8 @@ METHOD salespole_criar_pedido.
                 iv_msg    = 'Obrigatorios: codvendedor, codigocli, codigo_interno, itens' ).
     RETURN.
   ENDIF.
+
+  lv_bonif  = xsdbool( to_lower( ls_req-tipo ) = 'bonificacao' ).
 
   lv_dt_ent = parse_data( ls_req-dt_entrega ).
   lv_dt_cri = parse_data( ls_req-dt_criacao ).
@@ -2473,7 +2884,14 @@ METHOD salespole_criar_pedido.
   " Data de entrega: proxima entrega do cliente depois da compra
   " ------------------------------------------------------------------
   lt_dias = dias_entrega( lv_kunnr ).
-  lv_base = COND #( WHEN lv_dt_cri > sy-datum THEN lv_dt_cri ELSE sy-datum ).
+  " pedido feito depois do corte (17h) conta como do dia seguinte; offline/sincronizado depois nunca fica no passado
+  DATA(lv_dt_comercial) = COND d( WHEN ls_req-apos_corte = 'true' THEN lv_dt_cri + 1 ELSE lv_dt_cri ).
+  lv_base = COND #( WHEN lv_dt_comercial > sy-datum THEN lv_dt_comercial ELSE sy-datum ).
+
+  " prazo minimo de producao: o maior entre os itens; a entrega so vale a partir de base + prazo
+  lv_prazo  = prazo_producao( VALUE ty_t_matnr( FOR a IN ls_req-itens
+                                                 ( CONV matnr( |{ a-produto ALPHA = IN WIDTH = 18 }| ) ) ) ).
+  lv_minima = lv_base + lv_prazo.
 
   IF ls_req-dt_entrega IS NOT INITIAL.
 
@@ -2481,10 +2899,14 @@ METHOD salespole_criar_pedido.
     DATA(lv_pedida) = parse_data( ls_req-dt_entrega ).
     lv_dia = |{ ( lv_pedida - lv_refd ) MOD 7 + 1 }|.
     READ TABLE lt_dias TRANSPORTING NO FIELDS WITH KEY table_line = lv_dia.
+    DATA(lv_dia_ok) = sy-subrc.
+    DATA(lv_ped_iso) = iso_data( lv_pedida ).
+    READ TABLE ls_req-feriados TRANSPORTING NO FIELDS WITH KEY table_line = lv_ped_iso.
+    DATA(lv_feriado) = sy-subrc.
 
-    IF lv_pedida IS INITIAL OR lv_pedida <= lv_base OR sy-subrc <> 0.
+    IF lv_pedida IS INITIAL OR lv_pedida < lv_minima OR lv_dia_ok <> 0 OR lv_feriado = 0.
       send_error( iv_status = 422
-                  iv_msg    = 'dt_entrega invalida: precisa ser dia de entrega do cliente e posterior a compra' ).
+                  iv_msg    = |dt_entrega invalida: precisa ser dia de entrega do cliente e respeitar o prazo de producao ({ lv_prazo } dia(s) apos a compra)| ).
       RETURN.
     ENDIF.
 
@@ -2492,12 +2914,19 @@ METHOD salespole_criar_pedido.
 
   ELSE.
 
-    lv_dt_ent = lv_base.
-    DO 14 TIMES.
+    " parte do dia anterior ao primeiro dia possivel (base + prazo)
+    lv_dt_ent = lv_minima - 1.
+    DO 30 TIMES.
       lv_dt_ent = lv_dt_ent + 1.
       lv_dia = |{ ( lv_dt_ent - lv_refd ) MOD 7 + 1 }|.
       READ TABLE lt_dias TRANSPORTING NO FIELDS WITH KEY table_line = lv_dia.
-      IF sy-subrc = 0.
+      IF sy-subrc <> 0.
+        CONTINUE.
+      ENDIF.
+      " dia de entrega do cliente: se for feriado, pula para o proximo
+      DATA(lv_data_iso) = iso_data( lv_dt_ent ).
+      READ TABLE ls_req-feriados TRANSPORTING NO FIELDS WITH KEY table_line = lv_data_iso.
+      IF sy-subrc <> 0.
         EXIT.
       ENDIF.
     ENDDO.
@@ -2623,7 +3052,8 @@ METHOD salespole_criar_pedido.
     " --- cabecalho ---
     ls_hdrx-updateflag = 'I'.
 
-    ls_hdr-doc_type   = 'Z001'.       ls_hdrx-doc_type   = 'X'.
+    ls_hdr-doc_type   = COND #( WHEN lv_bonif = abap_true THEN c_auart_bonif ELSE 'Z001' ).
+    ls_hdrx-doc_type  = 'X'.
     ls_hdr-sales_org  = ls_vv-vkorg.  ls_hdrx-sales_org  = 'X'.
     ls_hdr-distr_chan = ls_vv-vtweg.  ls_hdrx-distr_chan = 'X'.
     ls_hdr-division   = ls_vv-spart.  ls_hdrx-division   = 'X'.
@@ -2656,10 +3086,22 @@ METHOD salespole_criar_pedido.
       ls_hdrx-pymt_meth = 'X'.
     ENDIF.
 
-    " numero da ordem de compra do cliente
-    IF ls_req-ordem_compra_cliente IS NOT INITIAL.
+    IF lv_bonif = abap_true.
+
+      " bonificacao: motivo do pedido (codigo do tipo) e marca 'BONIFICAÇÃO' no lugar da ordem de compra
+      ls_hdr-ord_reason  = COND #( WHEN ls_req-tipo_bonificacao IS NOT INITIAL
+                                   THEN CONV augru( ls_req-tipo_bonificacao )
+                                   ELSE c_motivo_bonif ).
+      ls_hdrx-ord_reason = 'X'.
+      ls_hdr-purch_no_c  = c_texto_bonif.
+      ls_hdrx-purch_no_c = 'X'.
+
+    ELSEIF ls_req-ordem_compra_cliente IS NOT INITIAL.
+
+      " numero da ordem de compra do cliente
       ls_hdr-purch_no_c  = ls_req-ordem_compra_cliente.
       ls_hdrx-purch_no_c = 'X'.
+
     ENDIF.
 
     " --- parceiros: cliente (AG) e vendedor (ZV) ---
@@ -2781,6 +3223,21 @@ METHOD salespole_criar_pedido.
       CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
         EXPORTING
           wait = 'X'.
+
+      " bonificacao: centro de custo (codigo) direto na VBAK; sem codigo, o padrao
+      IF lv_bonif = abap_true.
+        lv_cc = COND #( WHEN ls_req-centro_custo IS NOT INITIAL THEN CONV kostl( condense( ls_req-centro_custo ) )
+                        ELSE CONV kostl( c_cc_padrao ) ).
+
+        SELECT SINGLE * FROM vbak INTO @DATA(ls_vbak_cc) WHERE vbeln = @lv_vbeln.
+        IF sy-subrc = 0.
+          ls_vbak_cc-kostl = lv_cc.
+          MODIFY vbak FROM ls_vbak_cc.
+          IF sy-subrc = 0.
+            COMMIT WORK.
+          ENDIF.
+        ENDIF.
+      ENDIF.
 
       APPEND VALUE #( ordem         = |{ lv_vbeln ALPHA = OUT }|
                       tipo_material = lv_tipo

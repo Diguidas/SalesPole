@@ -40,6 +40,7 @@ METHOD if_rest_resource~get.
   TRY.
       CASE lv_recurso.
         WHEN 'vendedor'.        salespole_vendedor( ).
+        WHEN 'vendedores'.      salespole_vendedores( ).
         WHEN 'clientes'.        salespole_clientes( ).
         WHEN 'pedidos'.         salespole_pedidos( ).
         WHEN 'itens'.           salespole_itens( ).
@@ -349,6 +350,56 @@ METHOD dias_entrega.
   IF rt_dias IS INITIAL.
     rt_dias = VALUE #( ( `1` ) ( `2` ) ( `3` ) ( `4` ) ( `5` ) ( `6` ) ).
   ENDIF.
+
+ENDMETHOD.
+
+
+METHOD prazo_producao.
+
+  " maior prazo (1 ou 2 dias) entre os materiais do pedido
+  DATA: lv_dias  TYPE i,
+        lv_ladgr TYPE marc-ladgr,
+        lv_low   TYPE tvarvc-low,
+        lv_x     TYPE tvarvc-low.
+
+  rv_dias = 1.
+
+  LOOP AT it_matnr INTO DATA(lv_matnr).
+
+    lv_low = |{ lv_matnr ALPHA = OUT }|.
+
+    SELECT SINGLE low FROM tvarvc INTO @lv_x
+      WHERE name = 'ZPROD_SELLENT_24' AND low = @lv_low.
+    IF sy-subrc = 0.
+      lv_dias = 1.
+    ELSE.
+      SELECT SINGLE low FROM tvarvc INTO @lv_x
+        WHERE name = 'ZPROD_SELLENT_48' AND low = @lv_low.
+      IF sy-subrc = 0.
+        lv_dias = 2.
+      ELSE.
+        " grupo de carregamento do primeiro centro (2002, 2014, 2015, 2100) que tiver valor
+        CLEAR lv_ladgr.
+        SELECT ladgr FROM marc
+          WHERE matnr = @lv_matnr
+            AND werks IN ( '2002', '2014', '2015', '2100' )
+            AND ladgr <> @space
+          ORDER BY werks
+          INTO @lv_ladgr UP TO 1 ROWS.
+        ENDSELECT.
+        IF lv_ladgr = '0001' OR lv_ladgr = '0006' OR lv_ladgr = '0007'.
+          lv_dias = 2.
+        ELSE.
+          lv_dias = 1.
+        ENDIF.
+      ENDIF.
+    ENDIF.
+
+    IF lv_dias > rv_dias.
+      rv_dias = lv_dias.
+    ENDIF.
+
+  ENDLOOP.
 
 ENDMETHOD.
 

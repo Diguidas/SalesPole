@@ -1,7 +1,10 @@
 METHOD salespole_pedidos.
 
-  " GET /salespole/pedidos?codvendedor=[&codigocli=][&datain=][&datafim=][&dtentrega=]
+  " GET /salespole/pedidos?codvendedor=[&codigocli=][&datain=][&datafim=][&dtentrega=][&ordens=]
   "   - sem filtros de data: ultimos 90 dias de criacao
+  "   - ordens (ou ordem): 1 a 50 numeros de ordem separados por virgula. Devolve SO elas (qualquer data), na hora,
+  "     sem varrer a carteira: usado quando o vendedor abre uma ordem que acabou de criar. Continua valendo a
+  "     carteira: ordem de cliente de outro vendedor nao volta.
   "   - dtentrega: pedidos da carteira com data de remessa naquele dia
   "     (qualquer data de criacao) -> tela "remessas de hoje"
   " Sem SUBMIT zsdr124 (a ZSDT139 deve ser alimentada por job).
@@ -54,6 +57,7 @@ METHOD salespole_pedidos.
         lr_auart    TYPE RANGE OF vbak-auart,
         lr_erdat    TYPE RANGE OF vbak-erdat,
         lr_vdatu    TYPE RANGE OF vbak-vdatu,
+        lr_vbeln    TYPE RANGE OF vbak-vbeln,
         lv_nf       TYPE string,
         lv_serie    TYPE string,
         lv_tem_fat  TYPE abap_bool,
@@ -72,6 +76,27 @@ METHOD salespole_pedidos.
   DATA(lv_fim) = parse_data( mo_request->get_uri_query_parameter( 'datafim' ) ).
   DATA(lv_ent) = parse_data( mo_request->get_uri_query_parameter( 'dtentrega' ) ).
 
+  " ordens especificas: resposta imediata, sem varrer a carteira por data
+  DATA(lv_ordens) = mo_request->get_uri_query_parameter( 'ordens' ).
+  IF lv_ordens IS INITIAL.
+    lv_ordens = mo_request->get_uri_query_parameter( 'ordem' ).
+  ENDIF.
+
+  IF lv_ordens IS NOT INITIAL.
+    SPLIT lv_ordens AT ',' INTO TABLE DATA(lt_txt_ord).
+    LOOP AT lt_txt_ord INTO DATA(lv_o).
+      CONDENSE lv_o.
+      IF lv_o IS NOT INITIAL.
+        APPEND VALUE #( sign = 'I' option = 'EQ' low = CONV vbak-vbeln( |{ lv_o ALPHA = IN WIDTH = 10 }| ) ) TO lr_vbeln.
+      ENDIF.
+    ENDLOOP.
+
+    IF lr_vbeln IS INITIAL OR lines( lr_vbeln ) > 50.
+      send_error( iv_status = 400 iv_msg = 'Informe de 1 a 50 ordens' ).
+      RETURN.
+    ENDIF.
+  ENDIF.
+
   IF lv_ini IS INITIAL.
     lv_ini = sy-datum - 90.
   ENDIF.
@@ -79,7 +104,10 @@ METHOD salespole_pedidos.
     lv_fim = sy-datum.
   ENDIF.
 
-  IF lv_ent IS NOT INITIAL.
+  IF lr_vbeln IS NOT INITIAL.
+    " por numero de ordem: qualquer data (os ranges de data ficam vazios = sem restricao)
+    CLEAR: lr_erdat, lr_vdatu.
+  ELSEIF lv_ent IS NOT INITIAL.
     lr_vdatu = VALUE #( ( sign = 'I' option = 'EQ' low = lv_ent ) ).
   ELSE.
     lr_erdat = VALUE #( ( sign = 'I' option = 'BT' low = lv_ini high = lv_fim ) ).
@@ -98,6 +126,7 @@ METHOD salespole_pedidos.
     WHERE kunnr = @lt_kunnr-table_line
       AND erdat IN @lr_erdat
       AND vdatu IN @lr_vdatu
+      AND vbeln IN @lr_vbeln
       AND auart IN @lr_auart.
 
   IF lt_vbak IS INITIAL.

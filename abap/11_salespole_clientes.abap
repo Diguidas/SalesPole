@@ -24,8 +24,12 @@ METHOD salespole_clientes.
            lista_preco          TYPE ty_cd,          " PLTYP
            rede                 TYPE ty_cd,          " grupo de clientes (KDGRP)
            tipo_estabelecimento TYPE ty_cd,
+           escritorio           TYPE ty_cd,          " KNVV-VKBUR (regras de incentivo por escritorio)
          END OF ty_area,
          tt_area TYPE STANDARD TABLE OF ty_area WITH EMPTY KEY,
+
+         " lista codigo/descricao (formas de pagamento)
+         tt_cd TYPE STANDARD TABLE OF ty_cd WITH EMPTY KEY,
 
          BEGIN OF ty_cliente,
            codigocli            TYPE string,
@@ -41,6 +45,11 @@ METHOD salespole_clientes.
            dias_entrega         TYPE string_table,   " 1=seg ... 7=dom
            classe_risco         TYPE ty_cd,
            areas                TYPE tt_area,
+           latitude             TYPE string,         " ZSDT015-LATITUTE
+           longitude            TYPE string,         " ZSDT015-LONGITUDE
+           pedido_minimo        TYPE string,         " ZSDT136-VALOR (por segmento KNVV-VERSG)
+           formas_pagamento     TYPE tt_cd,          " KNB1-ZWELS (uma letra = uma forma) + T042Z
+           pagamento_antecipado TYPE string,         " 'true' = forma de pagamento so 'V': sem credito (limite zerado)
          END OF ty_cliente,
          tt_cliente TYPE STANDARD TABLE OF ty_cliente WITH EMPTY KEY,
 
@@ -53,7 +62,11 @@ METHOD salespole_clientes.
         lt_txt      TYPE ty_t_txt,
         lt_pai      TYPE ty_t_kunnr,
         lv_vant     TYPE vkorg,
-        lv_delta    TYPE knkk-klimk.
+        lv_delta    TYPE knkk-klimk,
+        lv_versg    TYPE knvv-versg,
+        lv_letra    TYPE c LENGTH 1,
+        lv_off      TYPE i,
+        lv_antecipado TYPE abap_bool.
 
   resolve_clientes( IMPORTING et_kunnr = DATA(lt_kunnr) ).
 
@@ -71,7 +84,7 @@ METHOD salespole_clientes.
     FOR ALL ENTRIES IN @lt_kunnr
     WHERE kunnr = @lt_kunnr-table_line.
 
-  SELECT kunnr, vkorg, vtweg, spart, zterm, versg, kdgrp, pltyp, vwerk
+  SELECT kunnr, vkorg, vtweg, spart, zterm, versg, kdgrp, pltyp, vwerk, vkbur
     FROM knvv
     INTO TABLE @DATA(lt_knvv)
     FOR ALL ENTRIES IN @lt_kunnr
@@ -89,7 +102,8 @@ METHOD salespole_clientes.
     FROM knkk
     INTO TABLE @DATA(lt_knkk)
     FOR ALL ENTRIES IN @lt_kunnr
-    WHERE kunnr = @lt_kunnr-table_line.
+    WHERE kunnr = @lt_kunnr-table_line
+    AND crblb EQ @space.
 
   " conta-mae de credito (limite total do grupo)
   lt_pai = VALUE #( FOR w IN lt_knkk WHERE ( knkli IS NOT INITIAL ) ( w-knkli ) ).
@@ -104,6 +118,33 @@ METHOD salespole_clientes.
       WHERE kunnr = @lt_pai-table_line.
     APPEND LINES OF lt_knkk_pai TO lt_knkk.
   ENDIF.
+
+  " ------------------------------------------------------------------
+  " Latitude/longitude, pedido minimo e formas de pagamento
+  " ------------------------------------------------------------------
+  SELECT kunnr, latitute, longitude
+    FROM zsdt015
+    INTO TABLE @DATA(lt_z015)
+    FOR ALL ENTRIES IN @lt_kunnr
+    WHERE kunnr = @lt_kunnr-table_line.
+
+  SELECT segmento, valor FROM zsdt136 INTO TABLE @DATA(lt_z136).
+
+  " KNB1 tem uma linha por empresa; juntamos as formas de todas elas
+  SELECT kunnr, zwels
+    FROM knb1
+    INTO TABLE @DATA(lt_knb1)
+    FOR ALL ENTRIES IN @lt_kunnr
+    WHERE kunnr = @lt_kunnr-table_line.
+
+  SELECT zlsch, text1 FROM t042z INTO TABLE @DATA(lt_t042z) WHERE land1 = 'BR'.
+
+  SORT lt_z015 BY kunnr.
+  DELETE ADJACENT DUPLICATES FROM lt_z015 COMPARING kunnr.
+  SORT lt_z136 BY segmento.
+  DELETE ADJACENT DUPLICATES FROM lt_z136 COMPARING segmento.
+  SORT lt_knb1 BY kunnr.
+  SORT lt_t042z BY zlsch.
 
   SORT lt_kna1 BY kunnr.
   SORT lt_knvv BY kunnr vkorg vtweg spart.
@@ -121,6 +162,7 @@ METHOD salespole_clientes.
   SELECT kdgrp, ktext FROM t151t INTO TABLE @DATA(lt_t151t) WHERE spras = @c_lang.
   SELECT kkber, ctlpc, rtext FROM t691t INTO TABLE @DATA(lt_t691t) WHERE spras = @c_lang.
   SELECT pltyp, ptext FROM t189t INTO TABLE @DATA(lt_t189t) WHERE spras = @c_lang.
+  SELECT vkbur, bezei FROM tvkbt INTO TABLE @DATA(lt_tvkbt) WHERE spras = @c_lang.
 
   lt_txt = VALUE #( BASE lt_txt FOR a IN lt_tvzbt ( tipo = 'ZTERM' codigo = a-zterm descricao = a-vtext ) ).
   lt_txt = VALUE #( BASE lt_txt FOR b IN lt_tvtwt ( tipo = 'VTWEG' codigo = b-vtweg descricao = b-vtext ) ).
@@ -129,6 +171,7 @@ METHOD salespole_clientes.
   lt_txt = VALUE #( BASE lt_txt FOR e IN lt_t151t ( tipo = 'KDGRP' codigo = e-kdgrp descricao = e-ktext ) ).
   lt_txt = VALUE #( BASE lt_txt FOR f IN lt_t691t ( tipo = 'CTLPC' codigo = |{ f-kkber }{ f-ctlpc }| descricao = f-rtext ) ).
   lt_txt = VALUE #( BASE lt_txt FOR g IN lt_t189t ( tipo = 'PLTYP' codigo = g-pltyp descricao = g-ptext ) ).
+  lt_txt = VALUE #( BASE lt_txt FOR h IN lt_tvkbt ( tipo = 'VKBUR' codigo = h-vkbur descricao = h-bezei ) ).
   SORT lt_txt BY tipo codigo.
 
   " ------------------------------------------------------------------
@@ -142,7 +185,7 @@ METHOD salespole_clientes.
 
   LOOP AT lt_kunnr INTO DATA(lv_kunnr).
 
-    CLEAR: ls_cli, ls_kna1, ls_knvv, ls_z111, ls_knkk, ls_knkkp, lv_vant.
+    CLEAR: ls_cli, ls_kna1, ls_knvv, ls_z111, ls_knkk, ls_knkkp, lv_vant, lv_versg, lv_antecipado.
 
     READ TABLE lt_kna1 INTO ls_kna1 WITH KEY kunnr = lv_kunnr BINARY SEARCH.
     IF sy-subrc <> 0.
@@ -170,10 +213,17 @@ METHOD salespole_clientes.
       ENDIF.
       lv_vant = ls_knvv-vkorg.
 
+      " segmento do cliente (define o pedido minimo): o da primeira area
+      IF lv_versg IS INITIAL.
+        lv_versg = ls_knvv-versg.
+      ENDIF.
+
       APPEND VALUE #(
         vkorg                = ls_knvv-vkorg
         tipo_material        = tipo_da_org( ls_knvv-vkorg )
         centro               = ls_knvv-vwerk
+        escritorio           = VALUE #( codigo    = ls_knvv-vkbur
+                                        descricao = lookup_txt( it_txt = lt_txt iv_tipo = 'VKBUR' iv_cod = ls_knvv-vkbur ) )
         cond_pagamento       = VALUE #( codigo    = ls_knvv-zterm
                                         descricao = lookup_txt( it_txt = lt_txt iv_tipo = 'ZTERM' iv_cod = ls_knvv-zterm ) )
         canal                = VALUE #( codigo    = ls_knvv-vtweg
@@ -188,6 +238,59 @@ METHOD salespole_clientes.
                                         descricao = lookup_txt( it_txt = lt_txt iv_tipo = 'PLTYP' iv_cod = ls_knvv-pltyp ) ) )
         TO ls_cli-areas.
 
+    ENDLOOP.
+
+    " cliente com tabela de preco 'lixo' (33 ou 63) nao vai para a forca de vendas (mesma regra do get_financeiro_cli)
+    DATA(lv_ignorar) = abap_false.
+    LOOP AT ls_cli-areas INTO DATA(ls_ar_chk).
+      IF ls_ar_chk-lista_preco-codigo = c_pltyp_lixo_1 OR ls_ar_chk-lista_preco-codigo = c_pltyp_lixo_2.
+        lv_ignorar = abap_true.
+        EXIT.
+      ENDIF.
+    ENDLOOP.
+    IF lv_ignorar = abap_true.
+      CONTINUE.
+    ENDIF.
+
+    " --- latitude / longitude ---
+    " LATITUTE/LONGITUDE sao CHAR no SAP: vao como texto (o sinal '-' ja vem no valor).
+    READ TABLE lt_z015 INTO DATA(ls_z015) WITH KEY kunnr = lv_kunnr BINARY SEARCH.
+    IF sy-subrc = 0.
+      ls_cli-latitude  = |{ ls_z015-latitute }|.
+      ls_cli-longitude = |{ ls_z015-longitude }|.
+      CONDENSE ls_cli-latitude NO-GAPS.
+      CONDENSE ls_cli-longitude NO-GAPS.
+    ENDIF.
+
+    " --- pedido minimo (por segmento do cliente) ---
+    IF lv_versg IS NOT INITIAL.
+      READ TABLE lt_z136 INTO DATA(ls_z136) WITH KEY segmento = lv_versg BINARY SEARCH.
+      IF sy-subrc = 0.
+        ls_cli-pedido_minimo = |{ ls_z136-valor DECIMALS = 2 }|.
+      ENDIF.
+    ENDIF.
+
+    " --- formas de pagamento: cada letra de KNB1-ZWELS e uma forma; texto na T042Z ---
+    LOOP AT lt_knb1 INTO DATA(ls_knb1) WHERE kunnr = lv_kunnr.
+      " forma de pagamento so 'V' (campo inteiro, como no get_financeiro_cli) = pagamento ANTECIPADO
+      IF ls_knb1-zwels = c_zwels_antecipado.
+        lv_antecipado = abap_true.
+      ENDIF.
+      DO strlen( ls_knb1-zwels ) TIMES.
+        lv_off   = sy-index - 1.
+        lv_letra = ls_knb1-zwels+lv_off(1).
+        IF lv_letra IS INITIAL.
+          CONTINUE.
+        ENDIF.
+        " a mesma forma pode vir de varias empresas: so uma vez
+        IF line_exists( ls_cli-formas_pagamento[ codigo = lv_letra ] ).
+          CONTINUE.
+        ENDIF.
+        READ TABLE lt_t042z INTO DATA(ls_t042z) WITH KEY zlsch = lv_letra BINARY SEARCH.
+        APPEND VALUE #( codigo    = lv_letra
+                        descricao = COND #( WHEN sy-subrc = 0 THEN ls_t042z-text1 ) )
+          TO ls_cli-formas_pagamento.
+      ENDDO.
     ENDLOOP.
 
     " --- dias de entrega (1=seg ... 7=dom) ---
@@ -229,7 +332,7 @@ METHOD salespole_clientes.
       CALL FUNCTION 'CREDIT_EXPOSURE'
         EXPORTING
           kkber                = ls_knkk-kkber
-          kunnr                = ls_knkk-kunnr
+          kunnr                = ls_knkk-knkli
           date_credit_exposure = sy-datum
         IMPORTING
           delta_to_limit       = lv_delta
@@ -241,6 +344,14 @@ METHOD salespole_clientes.
       ENDIF.
       ls_cli-limite_disponivel = |{ lv_delta DECIMALS = 2 }|.
 
+    ENDIF.
+
+    " pagamento ANTECIPADO: nao ha credito, o limite disponivel e ZERO (regra do get_financeiro_cli)
+    IF lv_antecipado = abap_true.
+      ls_cli-limite_disponivel = '0.00'.
+      ls_cli-pagamento_antecipado = 'true'.
+    ELSE.
+      ls_cli-pagamento_antecipado = 'false'.
     ENDIF.
 
     APPEND ls_cli TO ls_response-clientes.
