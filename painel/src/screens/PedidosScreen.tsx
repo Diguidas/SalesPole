@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api } from '../api';
-import { useAuth } from '../auth';
+import { useGavetas } from '../gavetas';
+import { PedidoDetalhe } from './PedidoDetalhe';
 
 interface PedidoSap {
   ordem: string; cod_cliente: string; cliente: string | null; rota: string | null; vendedor: string | null;
@@ -13,13 +14,6 @@ interface PedidoApp {
   criado_por_painel: string | null; ordens: string[]; qtd_itens: number; cod_cliente: string; cliente: string | null; cod_vendedor: string; vendedor: string | null;
 }
 interface Lista<T> { origem: string; pagina: number; por_pagina: number; total: number; itens: T[] }
-interface Detalhe extends Omit<PedidoSap, 'notas'> {
-  vendedores: Array<{ cod_vendedor: string; nome: string | null }>;
-  notas: Array<{ nota_fiscal?: string; serie?: string; danfe_url?: string; xml_url?: string; boleto_url?: string }> | number;
-  itens: Array<{ item: string; cod_produto: string; denominacao: string | null; quantidade: number | null; unidade_venda: string | null; valor_unitario: number | null; recusa: string | null }>;
-  cancelavel: boolean;
-  cancelamentos: Array<{ resultado: string; status_antes: string | null; motivo: string | null; por: string | null; criado_em: string }>;
-}
 interface Vendedor { cod_vendedor: string; nome: string | null }
 
 const PERIODOS = [{ d: 7, r: '7 dias' }, { d: 30, r: '30 dias' }, { d: 90, r: '90 dias' }, { d: 365, r: '12 meses' }];
@@ -35,7 +29,7 @@ const tomStatus = (s: string | null) => { const t = (s ?? '').toLowerCase(); ret
 
 /** Consulta geral de pedidos: os do SAP (com detalhe e cancelamento) e os criados pelo app e pelo painel. */
 export function PedidosScreen() {
-  const { usuario } = useAuth();
+  const gavetas = useGavetas();
   const [params, setParams] = useSearchParams();
   const [origem, setOrigem] = useState<'sap' | 'app'>('sap');
   const [dias, setDias] = useState(30);
@@ -50,7 +44,6 @@ export function PedidosScreen() {
   const [vendedores, setVendedores] = useState<Vendedor[]>([]);
   const [dados, setDados] = useState<Lista<PedidoSap | PedidoApp> | null>(null);
   const [erro, setErro] = useState<string | null>(null);
-  const [aberto, setAberto] = useState<string | null>(params.get('ordem'));
 
   useEffect(() => {
     api<Vendedor[]>('/painel/pedido-novo/vendedores').then(setVendedores).catch(() => undefined);
@@ -75,10 +68,28 @@ export function PedidosScreen() {
   useEffect(() => {
     void carregar();
   }, [carregar]);
+  const carregarRef = useRef(carregar);
+  carregarRef.current = carregar;
 
   const mudar = (fn: () => void) => { fn(); setPagina(1); };
   const totalPaginas = dados ? Math.max(1, Math.ceil(dados.total / dados.por_pagina)) : 1;
-  const abrir = (o: string | null) => { setAberto(o); const p = new URLSearchParams(params); if (o) p.set('ordem', o); else p.delete('ordem'); setParams(p, { replace: true }); };
+  // abre o pedido numa gaveta lateral (empilha por cima de outras); a ordem fica na URL para poder compartilhar o link
+  const abrir = useCallback((o: string) => {
+    setParams((p) => { const n = new URLSearchParams(p); n.set('ordem', o); return n; }, { replace: true });
+    gavetas.abrir({
+      id: `pedido-${o}`,
+      titulo: `Pedido ${o}`,
+      conteudo: <PedidoDetalhe ordem={o} aoMudar={() => void carregarRef.current()} />,
+      aoFechar: () => setParams((p) => { const n = new URLSearchParams(p); n.delete('ordem'); return n; }, { replace: true }),
+    });
+  }, [gavetas, setParams]);
+
+  // link com ?ordem=...: abre a gaveta ao entrar na tela
+  useEffect(() => {
+    const o = params.get('ordem');
+    if (o) abrir(o);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <>
@@ -169,152 +180,6 @@ export function PedidosScreen() {
         </>
       )}
 
-      {aberto && <DetalhePedido ordem={aberto} podeCancelar={usuario?.papel === 'admin' || usuario?.papel === 'aprovador'} aoFechar={() => abrir(null)} aoMudar={carregar} />}
     </>
-  );
-}
-
-function DetalhePedido({ ordem, podeCancelar, aoFechar, aoMudar }: { ordem: string; podeCancelar: boolean; aoFechar: () => void; aoMudar: () => void }) {
-  const [d, setD] = useState<Detalhe | null>(null);
-  const [erro, setErro] = useState<string | null>(null);
-  const [aviso, setAviso] = useState<string | null>(null);
-  const [ocupado, setOcupado] = useState(false);
-  const [cancelando, setCancelando] = useState(false);
-  const [motivo, setMotivo] = useState('');
-
-  const carregar = useCallback(async () => {
-    try {
-      setD(await api<Detalhe>(`/painel/pedidos/${ordem}`));
-      setErro(null);
-    } catch (e) {
-      setErro((e as Error).message);
-    }
-  }, [ordem]);
-
-  useEffect(() => {
-    setD(null);
-    void carregar();
-  }, [carregar]);
-
-  async function atualizar() {
-    setOcupado(true);
-    setErro(null);
-    setAviso(null);
-    try {
-      setD(await api<Detalhe>(`/painel/pedidos/${ordem}/atualizar`, { method: 'POST', body: {} }));
-      setAviso('Dados atualizados do SAP.');
-      aoMudar();
-    } catch (e) {
-      setErro((e as Error).message);
-    } finally {
-      setOcupado(false);
-    }
-  }
-
-  async function cancelar() {
-    setOcupado(true);
-    setErro(null);
-    setAviso(null);
-    try {
-      await api(`/painel/pedidos/${ordem}/cancelar`, { method: 'POST', body: { motivo } });
-      setCancelando(false);
-      setMotivo('');
-      setAviso('Pedido cancelado no SAP.');
-      await carregar();
-      aoMudar();
-    } catch (e) {
-      setErro((e as Error).message);
-    } finally {
-      setOcupado(false);
-    }
-  }
-
-  const notas = d && Array.isArray(d.notas) ? d.notas : [];
-  const total = d?.itens.reduce((a, i) => a + (i.recusa ? 0 : (i.quantidade ?? 0) * (i.valor_unitario ?? 0)), 0) ?? 0;
-
-  return (
-    <div className="gaveta-fundo" onClick={aoFechar}>
-      <div className="gaveta" onClick={(e) => e.stopPropagation()}>
-        <div className="linha" style={{ alignItems: 'center', marginBottom: 8 }}>
-          <h2 style={{ margin: 0 }}>Pedido {ordem}</h2>
-          <button className="btn" onClick={aoFechar}>Fechar</button>
-        </div>
-        {!d && !erro && <div className="vazio">Carregando…</div>}
-        {erro && <p className="erro-msg">{erro}</p>}
-        {aviso && <p style={{ color: '#166534', fontSize: 13 }}>{aviso}</p>}
-        {d && (
-          <>
-            <div className="card" style={{ padding: 12 }}>
-              <div className="linha">
-                <div>
-                  <div className="titulo"><Link to={`/clientes/${d.cod_cliente}`}>{d.cliente ?? d.cod_cliente}</Link> <span className="suave">· {d.cod_cliente}</span></div>
-                  <div className="suave">Vendedor: {d.vendedores.map((v) => v.nome ?? v.cod_vendedor).join(' / ') || '—'}{d.rota ? ` · rota ${d.rota}` : ''}</div>
-                  <div className="suave">Criado {dataBR(d.dt_criacao)} · entrega {dataBR(d.dt_entrega)}{d.plataforma ? ` · ${d.plataforma}` : ''}{d.pedido_externo ? ` · externo ${d.pedido_externo}` : ''}</div>
-                </div>
-                <div style={{ textAlign: 'right' }}>
-                  <span className={`selo ${tomStatus(d.status)}`}>{d.status ?? '—'}</span>
-                  <div className="titulo" style={{ marginTop: 6 }}>{moeda(d.valor)}</div>
-                </div>
-              </div>
-            </div>
-
-            <div className="titulo" style={{ margin: '12px 0 6px' }}>Itens</div>
-            {d.itens.length === 0 ? (
-              <p className="suave">Os itens deste pedido ainda não foram baixados. Clique em "Atualizar do SAP".</p>
-            ) : (
-              <table>
-                <thead><tr><th>Produto</th><th style={{ textAlign: 'right' }}>Qtd</th><th style={{ textAlign: 'right' }}>Unitário</th><th style={{ textAlign: 'right' }}>Subtotal</th></tr></thead>
-                <tbody>
-                  {d.itens.map((i) => (
-                    <tr key={i.item} style={{ opacity: i.recusa ? 0.6 : 1 }}>
-                      <td>{i.denominacao ?? i.cod_produto} <span className="suave">· {i.cod_produto}</span>{i.recusa ? <div className="erro-msg" style={{ margin: 0 }}>Recusado: {i.recusa}</div> : null}</td>
-                      <td style={{ textAlign: 'right' }}>{i.quantidade ?? '—'} {i.unidade_venda ?? ''}</td>
-                      <td style={{ textAlign: 'right' }}>{moeda(i.valor_unitario)}</td>
-                      <td style={{ textAlign: 'right' }}>{i.recusa ? '—' : moeda((i.quantidade ?? 0) * (i.valor_unitario ?? 0))}</td>
-                    </tr>
-                  ))}
-                  <tr><td colSpan={3} style={{ textAlign: 'right', fontWeight: 700 }}>Total dos itens</td><td style={{ textAlign: 'right', fontWeight: 700 }}>{moeda(total)}</td></tr>
-                </tbody>
-              </table>
-            )}
-
-            {notas.length > 0 && (
-              <>
-                <div className="titulo" style={{ margin: '12px 0 6px' }}>Notas fiscais</div>
-                {notas.map((n, k) => (
-                  <div key={k} className="suave">NF {n.nota_fiscal ?? '—'}{n.serie ? `/${n.serie}` : ''} {n.danfe_url ? <a href={n.danfe_url} target="_blank" rel="noreferrer">DANFE</a> : null} {n.xml_url ? <a href={n.xml_url} target="_blank" rel="noreferrer">XML</a> : null} {n.boleto_url ? <a href={n.boleto_url} target="_blank" rel="noreferrer">Boleto</a> : null}</div>
-                ))}
-              </>
-            )}
-
-            {d.cancelamentos.length > 0 && (
-              <>
-                <div className="titulo" style={{ margin: '12px 0 6px' }}>Histórico de cancelamento</div>
-                {d.cancelamentos.map((c, k) => (
-                  <div key={k} className="suave">{dataHora(c.criado_em)} · <strong>{c.resultado === 'cancelado' ? 'Cancelado' : c.resultado === 'recusado' ? 'SAP recusou' : 'Erro'}</strong> · {c.por ? `por ${c.por}` : 'pelo vendedor no app'}{c.motivo ? ` · motivo: ${c.motivo}` : ''}</div>
-                ))}
-              </>
-            )}
-
-            <div style={{ display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap' }}>
-              <button className="btn" disabled={ocupado} onClick={atualizar}>{ocupado ? 'Aguarde…' : 'Atualizar do SAP'}</button>
-              {podeCancelar && d.cancelavel && !cancelando && <button className="btn erro" disabled={ocupado} onClick={() => setCancelando(true)}>Cancelar pedido</button>}
-            </div>
-            {podeCancelar && !d.cancelavel && <p className="suave" style={{ marginTop: 8 }}>Neste status ({d.status ?? 'sem status'}) o cancelamento não está liberado. Os status liberados ficam em Parâmetros.</p>}
-            {cancelando && (
-              <div className="card" style={{ marginTop: 10, borderColor: '#dc2626' }}>
-                <strong>Cancelar o pedido {ordem} no SAP?</strong>
-                <div className="suave">Isso não pode ser desfeito. O SAP ainda recusa o que já foi faturado.</div>
-                <textarea placeholder="Motivo (opcional, fica registrado)" value={motivo} onChange={(e) => setMotivo(e.target.value)} maxLength={300} />
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button className="btn erro" disabled={ocupado} onClick={cancelar}>{ocupado ? 'Cancelando…' : 'Confirmar cancelamento'}</button>
-                  <button className="btn" onClick={() => setCancelando(false)}>Voltar</button>
-                </div>
-              </div>
-            )}
-          </>
-        )}
-      </div>
-    </div>
   );
 }

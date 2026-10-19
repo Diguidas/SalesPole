@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import { Settings, UsersRound, ListOrdered, House, PlusCircle, Activity, Users, MapPinCheck, SlidersHorizontal, CalendarDays, ChevronDown, Gift, LogOut, Package, Percent, Star, Tag, Landmark } from 'lucide-react';
 import { useAuth } from '../auth';
+import { GavetasProvider } from '../gavetas';
 import logo from '../assets/salespole.png';
 import poletech from '../assets/poletech.png';
 
@@ -80,6 +81,7 @@ export function Shell() {
   const rotuloPapel = { admin: 'Administrador', aprovador: 'Aprovador', consulta: 'Consulta' }[usuario?.papel ?? 'consulta'];
 
   return (
+    <GavetasProvider>
     <div className="shell">
       <header className="topbar" ref={barra}>
         <img className="topbar-logo" src={logo} alt="Sales Pole" />
@@ -150,5 +152,6 @@ export function Shell() {
         <img src={poletech} alt="Pole Tech" />
       </footer>
     </div>
+    </GavetasProvider>
   );
 }
