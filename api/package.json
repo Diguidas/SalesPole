@@ -10,6 +10,7 @@
     "start:prod": "node dist/main.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "sync:vendedor": "nest build && node dist/cli/sync-vendedor.js",
+    "historico:vendedor": "nest build && node dist/cli/historico-vendedor.js",
     "test:push": "nest build && node test/push.flow.test.cjs",
     "criar:usuario": "nest build && node dist/cli/criar-usuario.js"
   },

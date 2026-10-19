@@ -41,6 +41,15 @@ export class PedidosController {
     return { resultados };
   }
 
+  /**
+   * Cancela uma ordem do SAP (so nos status que o painel liberou; ver parametros.status_cancelaveis).
+   * Corpo opcional: { "motivo": "..." } (fica na auditoria).
+   */
+  @Post('sap/:ordem/cancelar')
+  cancelarOrdem(@VendedorLogado() v: Logado, @Param('ordem') ordem: string, @Body() body: { motivo?: string }) {
+    return this.pedidos.cancelarOrdemSap(v, ordem, body?.motivo ?? null);
+  }
+
   /** Reenvia um pedido em 'erro' depois que o vendedor corrigiu o problema. */
   @Post(':id/reenviar')
   reenviar(@VendedorLogado() v: Logado, @Param('id', new ParseUUIDPipe()) id: string) {

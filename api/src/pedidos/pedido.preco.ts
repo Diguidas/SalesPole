@@ -12,13 +12,15 @@ export interface LinhaPrecoSrv {
 }
 
 export interface DadosProdutoSrv {
+  /** ID da linha/grupo/categoria e marca (texto): valem para as regras de incentivo por classificacao */
+  classificacao?: { linha_id?: string | null; grupo_id?: string | null; categoria_id?: string | null; marca?: string | null };
   unidade_base?: string | null;
   conversoes?: Array<{ unidade: string; fator: number }>;
 }
 
 const arred2 = (x: number) => Math.round(Number((x * 100).toPrecision(12))) / 100;
 
-function fatorBase(unidade: string, d: DadosProdutoSrv): number | null {
+export function fatorBase(unidade: string, d: DadosProdutoSrv): number | null {
   if (d.unidade_base && unidade === d.unidade_base) return 1;
   const f = d.conversoes?.find((c) => c.unidade === unidade)?.fator;
   return f && f > 0 ? f : null;

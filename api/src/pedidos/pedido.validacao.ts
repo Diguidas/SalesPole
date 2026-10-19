@@ -17,6 +17,12 @@ export interface PedidoEntrada {
   enderecoEntrega: string | null;
   observacao: string | null;
   duplicadoDe: string | null;
+  /** venda | bonificacao (bonificacao so vai ao SAP depois de aprovada) */
+  tipo: 'venda' | 'bonificacao';
+  tipoBonificacao: string | null;
+  centroCusto: string | null;
+  /** so para quem aprova: NAO vai ao SAP */
+  justificativa: string | null;
   itens: ItemEntrada[];
 }
 
@@ -68,6 +74,18 @@ export function validarPedido(raw: unknown): ResultadoValidacao {
   const duplicadoDe = texto(r.duplicado_de, 36)?.toLowerCase() ?? null;
   if (duplicadoDe && !UUID.test(duplicadoDe)) erros.push('duplicado_de deve ser um UUID');
 
+  const tipoRaw = texto(r.tipo, 12)?.toLowerCase() ?? 'venda';
+  if (tipoRaw !== 'venda' && tipoRaw !== 'bonificacao') erros.push("tipo deve ser 'venda' ou 'bonificacao'");
+  const tipo: 'venda' | 'bonificacao' = tipoRaw === 'bonificacao' ? 'bonificacao' : 'venda';
+  const tipoBonificacao = tipo === 'bonificacao' ? texto(r.tipo_bonificacao, 10) : null;
+  const centroCusto = tipo === 'bonificacao' ? texto(r.centro_custo, 20) : null;
+  const justificativa = tipo === 'bonificacao' ? texto(r.justificativa, 500) : null;
+  if (tipo === 'bonificacao') {
+    if (!tipoBonificacao) erros.push('tipo_bonificacao e obrigatorio na bonificacao');
+    if (!centroCusto) erros.push('centro_custo e obrigatorio na bonificacao');
+    if (!justificativa || justificativa.length < 5) erros.push('justificativa e obrigatoria na bonificacao (minimo 5 caracteres)');
+  }
+
   const itensRaw = Array.isArray(r.itens) ? r.itens : [];
   if (itensRaw.length < 1 || itensRaw.length > MAX_ITENS) erros.push(`itens deve ter de 1 a ${MAX_ITENS} itens`);
 
@@ -101,6 +119,10 @@ export function validarPedido(raw: unknown): ResultadoValidacao {
       enderecoEntrega: texto(r.endereco_entrega, 300),
       observacao: texto(r.observacao, 300),
       duplicadoDe,
+      tipo,
+      tipoBonificacao,
+      centroCusto,
+      justificativa,
       itens,
     },
   };

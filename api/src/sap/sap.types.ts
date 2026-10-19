@@ -5,6 +5,11 @@ export interface SapCd {
   descricao: string;
 }
 
+/** GET salespole_vendedores: todos os vendedores com rota vigente (painel gerencial). */
+export interface SapVendedoresResp {
+  vendedores: Array<{ codvendedor: string; nome: string; documento: string; rota: string }>;
+}
+
 export interface SapVendedorResp {
   codvendedor: string;
   nome: string;
@@ -30,6 +35,7 @@ export interface SapClienteArea {
   lista_preco: SapCd;
   rede: SapCd;
   tipo_estabelecimento: SapCd;
+  escritorio?: SapCd; // KNVV-VKBUR (regras de incentivo por escritorio)
 }
 
 export interface SapClientesResp {
@@ -47,6 +53,12 @@ export interface SapClientesResp {
     dias_entrega: string[]; // '1'..'7'
     classe_risco: SapCd;
     areas: SapClienteArea[];
+    latitude?: string;
+    longitude?: string;
+    pedido_minimo?: string;
+    formas_pagamento?: SapCd[];
+    /** 'true' = forma de pagamento so 'V' (antecipado): sem credito */
+    pagamento_antecipado?: string;
   }>;
 }
 
@@ -68,7 +80,11 @@ export interface SapProdutosResp {
     estoque: { disponivelecommerce: string; prazoentregadias: string };
     peso: { pesoliquido: string; pesobruto: string };
     pedido: { quantidademinima: string; multiplo: string };
-    classificacao: { marca: string; categoria: string; linha: string; grupo: string };
+    classificacao: {
+      marca: string; categoria: string; linha: string; grupo: string;
+      /** IDs do cadastro (ZSDT129-132): as regras de incentivo por classificacao usam o ID */
+      categoria_id?: string; linha_id?: string; grupo_id?: string;
+    };
   }>;
 }
 
@@ -162,6 +178,13 @@ export interface SapRemessasResp {
     quantidade_confirmada: string;
     peso: string;
   }>;
+}
+
+export interface SapCancelarResp {
+  cancelado?: string; // 'true' | 'false'
+  ordem?: string;
+  mensagens?: Array<{ tipo: string; mensagem: string }>;
+  erro?: string; // respostas de erro simples do dispatcher ({ "erro": "..." })
 }
 
 export interface SapCriarPedidoResp {

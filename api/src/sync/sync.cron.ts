@@ -71,6 +71,16 @@ export class SyncCron {
     }
   }
 
+  /**
+   * Vendedores marcados so para indicadores no painel (sem login no app): 2x por dia, de segunda a sabado.
+   * Quem tem login no app ja e sincronizado pelos jobs acima; aqui entra uma vez por rota.
+   */
+  @Cron('0 7,14 * * 1-6', { timeZone: TZ })
+  async indicadores() {
+    if (!this.habilitado || this.rodando.diario) return;
+    await this.sync.sincronizarMarcados('cron');
+  }
+
   private async vendedoresAtivos(): Promise<string[]> {
     const { data, error } = await this.sb.from('usuarios_vendedor').select('cod_vendedor').eq('ativo', true);
     if (error) throw error;

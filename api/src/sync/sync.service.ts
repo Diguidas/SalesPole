@@ -1,5 +1,6 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, Logger } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
+import { normCod } from '../auth/vendedores.service';
 import { SapClient } from '../sap/sap.client';
 import {
   SapClientesResp,
@@ -11,6 +12,7 @@ import {
   SapRemessasResp,
   SapTitulosResp,
   SapVendedorResp,
+  SapVendedoresResp,
 } from '../sap/sap.types';
 import { SUPABASE } from '../supabase/supabase.module';
 
@@ -24,10 +26,30 @@ export interface ResultadoSync {
 
 type Linha = Record<string, unknown>;
 
+export interface RodadaIndicadores {
+  rodando: boolean;
+  origem: 'cron' | 'painel' | null;
+  iniciado_em: string | null;
+  terminou_em: string | null;
+  total: number; // rotas na fila
+  feitos: number;
+  /** rotas puladas por ja estarem atualizadas (so no botao do painel: retoma de onde parou) */
+  puladas: number;
+  atual: string | null; // vendedor em andamento
+  falhas: Array<{ cod_vendedor: string; erro: string }>;
+  /** a API reiniciou no meio da rodada (so aparece ao ler o andamento gravado) */
+  interrompida?: boolean;
+}
+
 const num = (s: string | undefined | null): number | null => {
   if (s === undefined || s === null || s.trim() === '') return null;
   const n = Number(s);
   return Number.isFinite(n) ? n : null;
+};
+/** Coordenada: aceita virgula decimal; 0 ou vazio = sem localizacao (null). */
+const coord = (s: string | undefined | null): number | null => {
+  const n = num((s ?? '').replace(',', '.'));
+  return n === null || n === 0 ? null : n;
 };
 /** '' vira null (colunas de texto opcionais). */
 const txt = (s: string | undefined | null): string | null => (s ?? '').trim() || null;
@@ -40,6 +62,9 @@ const hojeSP = (somarDias = 0): string =>
   });
 
 const LOTE_DB = 200;
+const LOTES_EM_PARALELO = 4;
+/** Botao "Sincronizar agora": rota atualizada ha menos que isso e pulada (retoma uma rodada interrompida). */
+const RETOMAR_JA_ATUALIZADA_MIN = 120;
 const LOTE_ORDENS = 150; // ordens por chamada de itens (o ABAP aceita ate 300)
 const JANELA_REMESSAS_DIAS = 14;
 
@@ -106,9 +131,23 @@ export class SyncService {
       dias_entrega: (c.dias_entrega ?? []).map(Number),
       classe_risco: c.classe_risco,
       areas: c.areas ?? [],
+      latitude: coord(c.latitude),
+      longitude: coord(c.longitude),
+      pedido_minimo: num(c.pedido_minimo),
+      formas_pagamento: c.formas_pagamento ?? [],
+      pagamento_antecipado: c.pagamento_antecipado === 'true',
       synced_at: inicio,
     }));
     await this.upsert('clientes', rows, 'cod_cliente');
+
+    // cliente que o SAP deixou de mandar (ex.: tabela de preco 33/63) sai da carteira.
+    // So limpa se o SAP devolveu algum cliente: uma falha/resposta vazia nao pode apagar a carteira inteira.
+    if (rows.length) {
+      const tLimpa = Date.now();
+      const { error: eLimpa } = await this.sb.rpc('fn_limpar_clientes_rota', { p_rota: rota, p_inicio: inicio });
+      if (eLimpa) throw eLimpa;
+      this.logger.log(`Rota ${rota}: limpeza de clientes que sairam em ${((Date.now() - tLimpa) / 1000).toFixed(1)} s`);
+    }
 
     await this.estado('clientes', rota);
     this.logger.log(`Rota ${rota}: ${rows.length} clientes sincronizados`);
@@ -211,16 +250,46 @@ export class SyncService {
   // ===================================================================
 
   /** Pedidos dos ultimos 90 dias da carteira + itens dos que ainda precisam. */
-  async sincronizarPedidos(codVendedor: string, rota: string): Promise<number> {
+  async sincronizarPedidos(codVendedor: string, rota: string, dias = 90, comItens = true): Promise<number> {
     const inicio = new Date().toISOString();
-    // 90 dias em janelas de 15 (criacao): cada chamada fica bem abaixo do timeout de ~60 s do gateway do SAP
+    // `dias` (padrao 90) em janelas de 15 (criacao): cada chamada fica bem abaixo do timeout de ~60 s do gateway do SAP.
+    // A carga unica do historico (npm run historico:vendedor) usa janela maior.
     const todos: NonNullable<SapPedidosResp['pedidos']> = [];
-    for (const [datain, datafim] of janelasDeDias(90, 15)) {
+    for (const [datain, datafim] of janelasDeDias(dias, 15)) {
       const r = await this.comTentativas(() => this.sap.get<SapPedidosResp>('pedidos', { codvendedor: codVendedor, datain, datafim }));
       todos.push(...(r.pedidos ?? []));
     }
 
-    const pedidos = todos.map((p) => ({
+    const pedidos = todos.map((p) => this.linhaPedido(p, inicio));
+    await this.upsert('pedidos_sap', pedidos, 'ordem');
+    if (!comItens) {
+      this.logger.log(`Rota ${rota}: ${pedidos.length} pedidos (sem itens)`);
+      return pedidos.length;
+    }
+
+    // itens: so das ordens novas ou que ainda mudam (a funcao SQL decide)
+    const { data, error } = await this.sb.rpc('fn_ordens_para_itens', { p_rota: rota, p_dias: dias });
+    if (error) throw error;
+    const ordens = ((data ?? []) as Array<{ ordem: string }>).map((o) => o.ordem);
+
+    let totalItens = 0;
+    for (let i = 0; i < ordens.length; i += LOTE_ORDENS) {
+      const lote = ordens.slice(i, i + LOTE_ORDENS);
+      const it = await this.sap.get<SapItensResp>('itens', {
+        codvendedor: codVendedor,
+        ordens: lote.join(','),
+      });
+      const linhas = this.linhasItens(it, inicio);
+      await this.upsert('pedido_itens_sap', linhas, 'ordem,item');
+      totalItens += linhas.length;
+    }
+
+    this.logger.log(`Rota ${rota}: ${pedidos.length} pedidos, ${totalItens} itens`);
+    return pedidos.length;
+  }
+
+  private linhaPedido(p: NonNullable<SapPedidosResp['pedidos']>[number], inicio: string) {
+    return {
       ordem: p.ordem,
       cod_cliente: p.codigocli,
       tp_ped: txt(p.tp_ped),
@@ -239,42 +308,188 @@ export class SyncService {
         boleto_url: txt(n.boleto_url),
       })),
       synced_at: inicio,
-    }));
-    await this.upsert('pedidos_sap', pedidos, 'ordem');
+    };
+  }
 
-    // itens: so das ordens novas ou que ainda mudam (a funcao SQL decide)
-    const { data, error } = await this.sb.rpc('fn_ordens_para_itens', { p_rota: rota });
+  private linhasItens(it: SapItensResp, inicio: string) {
+    return (it.ordens ?? []).flatMap((o) =>
+      (o.itens ?? []).map((x) => ({
+        ordem: o.ordem,
+        item: x.item,
+        cod_produto: txt(x.material),
+        denominacao: txt(x.denominacao),
+        grupo: txt(x.grupo),
+        quantidade: num(x.quantidade),
+        unidade_venda: txt(x.unidade_venda),
+        valor_unitario: num(x.valor_unitario),
+        recusa: txt(x.recusa),
+        cod_recusa: txt(x.cod_recusa),
+        synced_at: inicio,
+      })),
+    );
+  }
+
+  /**
+   * Busca UMA ordem no SAP na hora (cabecalho + itens), sem esperar a carga da carteira.
+   * Devolve no mesmo formato das linhas do pull, ou null se o SAP nao a conhece (ou nao e da carteira do vendedor).
+   */
+  async sincronizarOrdem(codVendedor: string, ordem: string) {
+    const inicio = new Date().toISOString();
+    const r = await this.comTentativas(() => this.sap.get<SapPedidosResp>('pedidos', { codvendedor: codVendedor, ordens: ordem }));
+    const achado = (r.pedidos ?? []).find((p) => String(p.ordem).replace(/^0+/, '') === ordem.replace(/^0+/, ''));
+    if (!achado) return null;
+    const pedido = this.linhaPedido(achado, inicio);
+    await this.upsert('pedidos_sap', [pedido], 'ordem');
+
+    const it = await this.comTentativas(() => this.sap.get<SapItensResp>('itens', { codvendedor: codVendedor, ordens: ordem }));
+    const itens = this.linhasItens(it, inicio);
+    await this.upsert('pedido_itens_sap', itens, 'ordem,item');
+    return { pedido, itens };
+  }
+
+  /**
+   * Lista de todos os vendedores com rota vigente no SAP, gravada em `vendedores`. Vendedor novo entra com
+   * `indicadores = false` (o administrador marca no painel); quem ja existia mantem a marcacao.
+   */
+  async importarVendedores(): Promise<{ total: number; novos: number }> {
+    const r = await this.comTentativas(() => this.sap.get<SapVendedoresResp>('vendedores'));
+    const lista = (r.vendedores ?? []).filter((v) => v.codvendedor?.trim());
+    if (!lista.length) return { total: 0, novos: 0 };
+
+    const codigos = lista.map((v) => normCod(v.codvendedor));
+    const { data, error } = await this.sb.from('vendedores').select('cod_vendedor').in('cod_vendedor', codigos);
     if (error) throw error;
-    const ordens = ((data ?? []) as Array<{ ordem: string }>).map((o) => o.ordem);
+    const existentes = new Set((data ?? []).map((x: { cod_vendedor: string }) => x.cod_vendedor));
 
-    let totalItens = 0;
-    for (let i = 0; i < ordens.length; i += LOTE_ORDENS) {
-      const lote = ordens.slice(i, i + LOTE_ORDENS);
-      const it = await this.sap.get<SapItensResp>('itens', {
-        codvendedor: codVendedor,
-        ordens: lote.join(','),
-      });
-      const linhas = (it.ordens ?? []).flatMap((o) =>
-        (o.itens ?? []).map((x) => ({
-          ordem: o.ordem,
-          item: x.item,
-          cod_produto: txt(x.material),
-          denominacao: txt(x.denominacao),
-          grupo: txt(x.grupo),
-          quantidade: num(x.quantidade),
-          unidade_venda: txt(x.unidade_venda),
-          valor_unitario: num(x.valor_unitario),
-          recusa: txt(x.recusa),
-          cod_recusa: txt(x.cod_recusa),
-          synced_at: inicio,
-        })),
-      );
-      await this.upsert('pedido_itens_sap', linhas, 'ordem,item');
-      totalItens += linhas.length;
+    // so cadastro: a carteira e os pedidos vem na sincronizacao. `indicadores` nao entra no upsert (preserva a marcacao)
+    await this.upsert(
+      'vendedores',
+      lista.map((v) => ({ cod_vendedor: normCod(v.codvendedor), nome: txt(v.nome), documento: txt(v.documento), rota: txt(v.rota) })),
+      'cod_vendedor',
+    );
+    return { total: lista.length, novos: codigos.filter((c) => !existentes.has(c)).length };
+  }
+
+  /**
+   * Vendedor so de indicadores: carteira, clientes (escritorio/canal) e cabecalho dos pedidos, sem itens.
+   * Primeira vez da rota: 12 meses de pedidos; depois so os ultimos 90 dias.
+   */
+  async sincronizarParaIndicadores(codVendedor: string): Promise<string> {
+    const rota = await this.sincronizarVendedor(codVendedor);
+    await this.rodar('clientes', rota, () => this.sincronizarClientes(codVendedor, rota));
+    const { data, error } = await this.sb.from('sync_estado').select('ultimo_sucesso').eq('recurso', 'pedidos').eq('escopo', rota).maybeSingle();
+    if (error) throw error;
+    const dias = data?.ultimo_sucesso ? 90 : 365;
+    await this.rodar('pedidos', rota, () => this.sincronizarPedidos(codVendedor, rota, dias, false));
+    return rota;
+  }
+
+  // ===================================================================
+  // Vendedores marcados so para indicadores (cron 2x/dia e botao "Sincronizar agora" do painel)
+  // ===================================================================
+
+  /** Andamento da ultima rodada (em memoria: some ao reiniciar a API). */
+  readonly rodadaIndicadores: RodadaIndicadores = { rodando: false, origem: null, iniciado_em: null, terminou_em: null, total: 0, feitos: 0, puladas: 0, atual: null, falhas: [] };
+
+  /**
+   * Sincroniza, uma vez por rota, os vendedores marcados em `vendedores.indicadores` que NAO usam o app
+   * (os do app ja sao sincronizados pelos jobs normais). Uma falha num vendedor nao para os outros.
+   * So uma rodada por vez: o cron e o botao do painel dividem o mesmo bloqueio.
+   */
+  async sincronizarMarcados(origem: 'cron' | 'painel' = 'cron'): Promise<RodadaIndicadores> {
+    const r = this.rodadaIndicadores;
+    if (r.rodando) return r;
+    Object.assign(r, { rodando: true, origem, iniciado_em: new Date().toISOString(), terminou_em: null, total: 0, feitos: 0, puladas: 0, atual: null, falhas: [], interrompida: false });
+    await this.gravarRodada();
+    try {
+      const [app, marc] = await Promise.all([
+        this.sb.from('usuarios_vendedor').select('cod_vendedor').eq('ativo', true),
+        this.sb.from('vendedores').select('cod_vendedor, rota').eq('indicadores', true).order('cod_vendedor'),
+      ]);
+      if (app.error) throw app.error;
+      if (marc.error) throw marc.error;
+      const doApp = new Set((app.data ?? []).map((u: { cod_vendedor: string }) => normCod(u.cod_vendedor)));
+
+      // botao do painel: pula a rota ja atualizada ha pouco (a rodada interrompida recomeca de onde parou)
+      const recentes = new Set<string>();
+      if (origem === 'painel') {
+        const corte = Date.now() - RETOMAR_JA_ATUALIZADA_MIN * 60_000;
+        const { data: est, error: eEst } = await this.sb.from('sync_estado').select('escopo, ultimo_sucesso').eq('recurso', 'pedidos').limit(5000);
+        if (eEst) throw eEst;
+        for (const e of (est ?? []) as Array<{ escopo: string; ultimo_sucesso: string | null }>) {
+          if (e.ultimo_sucesso && Date.parse(e.ultimo_sucesso) >= corte) recentes.add(e.escopo);
+        }
+      }
+
+      const fila: string[] = [];
+      const rotas = new Set<string>();
+      for (const v of (marc.data ?? []) as Array<{ cod_vendedor: string; rota: string | null }>) {
+        if (doApp.has(normCod(v.cod_vendedor))) continue;
+        if (v.rota) {
+          if (rotas.has(v.rota)) continue;
+          rotas.add(v.rota);
+          if (recentes.has(v.rota)) {
+            r.puladas++;
+            continue;
+          }
+        }
+        fila.push(v.cod_vendedor);
+      }
+      r.total = fila.length;
+      await this.gravarRodada();
+
+      for (const cod of fila) {
+        r.atual = cod;
+        try {
+          await this.sincronizarParaIndicadores(cod);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          this.logger.error(`Indicadores: falha no vendedor ${cod}: ${msg}`);
+          r.falhas.push({ cod_vendedor: cod, erro: msg.slice(0, 300) });
+          await this.registrarErro('vendedor', cod, e).catch(() => undefined);
+        }
+        r.feitos++;
+        await this.gravarRodada();
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      this.logger.error(`Rodada de indicadores falhou: ${msg}`);
+      r.falhas.push({ cod_vendedor: '*', erro: msg.slice(0, 300) });
+    } finally {
+      r.rodando = false;
+      r.atual = null;
+      r.terminou_em = new Date().toISOString();
+      await this.gravarRodada();
     }
+    return r;
+  }
 
-    this.logger.log(`Rota ${rota}: ${pedidos.length} pedidos, ${totalItens} itens`);
-    return pedidos.length;
+  /** Grava o andamento (parametros) para sobreviver a reinicio da API; falha aqui nunca derruba a rodada. */
+  private async gravarRodada() {
+    const { error } = await this.sb
+      .from('parametros')
+      .upsert({ chave: 'rodada_indicadores', valor: { ...this.rodadaIndicadores }, descricao: 'Andamento da ultima rodada de sincronizacao dos vendedores de indicadores (uso interno)', updated_at: new Date().toISOString() }, { onConflict: 'chave' });
+    if (error) this.logger.warn(`Nao gravou o andamento da rodada: ${error.message}`);
+  }
+
+  /**
+   * Andamento para o painel: o da memoria quando esta API ja viu uma rodada; senao o gravado no banco.
+   * Se o gravado diz "rodando" mas esta API nao esta rodando nada, a API reiniciou no meio: `interrompida`.
+   */
+  async andamentoRodada(): Promise<RodadaIndicadores> {
+    const m = this.rodadaIndicadores;
+    if (m.rodando || m.iniciado_em) return { ...m };
+    const { data, error } = await this.sb.from('parametros').select('valor').eq('chave', 'rodada_indicadores').maybeSingle();
+    if (error || !data?.valor) return { ...m };
+    const g = data.valor as RodadaIndicadores;
+    return g.rodando ? { ...g, rodando: false, atual: null, interrompida: true } : { ...g };
+  }
+
+  /** Dispara a rodada em segundo plano (a resposta HTTP nao espera: pode levar minutos). */
+  iniciarSincronizacaoMarcados(): RodadaIndicadores {
+    if (this.rodadaIndicadores.rodando) throw new ConflictException('Ja existe uma sincronizacao em andamento');
+    void this.sincronizarMarcados('painel');
+    return this.rodadaIndicadores;
   }
 
   /** Repete uma vez (500/504 do gateway costumam passar na segunda tentativa). */
@@ -438,10 +653,16 @@ export class SyncService {
     for (const r of rows) unicas.set(cols.map((c) => String(r[c])).join('|'), r);
     const lista = [...unicas.values()];
 
-    for (let i = 0; i < lista.length; i += LOTE_DB) {
-      const { error } = await this.sb.from(table).upsert(lista.slice(i, i + LOTE_DB), { onConflict });
-      if (error) throw new Error(`upsert ${table}: ${error.message}`);
+    // lotes de LOTE_DB linhas, ate LOTES_EM_PARALELO por vez (carteira grande tem dezenas de lotes; um de cada vez demora minutos)
+    const t0 = Date.now();
+    const lotes: Linha[][] = [];
+    for (let i = 0; i < lista.length; i += LOTE_DB) lotes.push(lista.slice(i, i + LOTE_DB));
+    for (let i = 0; i < lotes.length; i += LOTES_EM_PARALELO) {
+      const respostas = await Promise.all(lotes.slice(i, i + LOTES_EM_PARALELO).map((l) => this.sb.from(table).upsert(l, { onConflict })));
+      const falha = respostas.find((r) => r.error);
+      if (falha?.error) throw new Error(`upsert ${table}: ${falha.error.message}`);
     }
+    if (lista.length > LOTE_DB) this.logger.log(`Gravou ${lista.length} linhas em ${table} (${lotes.length} lotes) em ${((Date.now() - t0) / 1000).toFixed(1)} s`);
   }
 }
 

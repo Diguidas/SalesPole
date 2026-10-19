@@ -1,10 +1,13 @@
 import {
+  BadGatewayException,
   BadRequestException,
   Controller,
   Get,
   HttpException,
   HttpStatus,
   Inject,
+  NotFoundException,
+  Param,
   Post,
   Query,
   UseGuards,
@@ -78,11 +81,42 @@ export class SyncController {
     // o codigo definitivo, as ordens do SAP e o status mesmo depois de uma retentativa
     let qApp = this.sb
       .from('pedidos_app')
-      .select('id, codigo, cod_cliente, status, ordens_sap, erro, dt_entrega, recebido_em, enviado_sap_em, tentativas, duplicado_de, updated_at')
+      .select('id, codigo, cod_cliente, status, ordens_sap, erro, dt_entrega, recebido_em, enviado_sap_em, tentativas, duplicado_de, updated_at, tipo, tipo_bonificacao, centro_custo, justificativa, motivo_rejeicao')
       .eq('cod_vendedor', v.codVendedor)
       .gte('recebido_em', new Date(Date.now() - 90 * 86_400_000).toISOString());
     if (desde) qApp = qApp.gt('updated_at', desde);
     const pedidosApp = this.ok(await qApp);
+
+    // cadastros do painel (pequenos): vao inteiros em todo pull; o app substitui o que tem
+    const hojeIso = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' });
+    const [tiposBonificacao, centrosCusto, destaques, incentivosBrutos, feriados] = await Promise.all([
+      this.sb.from('bonificacao_tipos').select('codigo, descricao').eq('ativo', true).order('codigo').then(this.ok),
+      this.sb.from('centros_custo').select('codigo, descricao').eq('ativo', true).order('codigo').then(this.ok),
+      this.sb.from('produto_destaques').select('cod_produto, destaque, lancamento, ordem').eq('ativo', true).order('ordem').then(this.ok),
+      this.sb
+        .from('incentivos_desconto')
+        .select('id, cod_produto, escopo, escopo_valor, linha_id, grupo_id, categoria_id, marca, qtd_minima, desconto_pct, desconto_extra_max_pct, vigencia_ini, vigencia_fim')
+        .eq('ativo', true)
+        .then(this.ok),
+      // feriados de hoje em diante (o app filtra os do estado/cidade de cada cliente)
+      this.sb.from('feriados').select('data, descricao, uf, cidade').eq('ativo', true).gte('data', hojeIso).order('data').then(this.ok),
+    ]);
+    const incentivos = (incentivosBrutos as Array<{ escopo: string; escopo_valor: string | null; vigencia_ini: string | null; vigencia_fim: string | null }>).filter(
+      (r) =>
+        (!r.vigencia_ini || r.vigencia_ini <= hojeIso) &&
+        (!r.vigencia_fim || r.vigencia_fim >= hojeIso) &&
+        (r.escopo !== 'vendedor' || r.escopo_valor === v.codVendedor),
+    );
+
+    // visitas dos ultimos dias: o app reconhece a visita feita em outro aparelho e mostra a validacao do painel
+    const desdeVisitas = new Date(Date.now() - 3 * 86_400_000).toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' });
+    const visitas = await this.sb
+      .from('visitas')
+      .select('id, cod_cliente, data_visita, status, checkin_em, checkin_lat, checkin_lng, checkin_precisao_m, checkin_gps_falso, distancia_m, fora_do_raio, sem_referencia, checkout_em, resultado, motivo_nao_venda, observacao, pedido_id, validacao, validacao_obs')
+      .eq('cod_vendedor', v.codVendedor)
+      .gte('data_visita', desdeVisitas)
+      .order('data_visita')
+      .then(this.ok);
 
     const resposta: Record<string, unknown> = {
       cursor,
@@ -96,6 +130,12 @@ export class SyncController {
       pedido_itens: pedidoItens,
       titulos,
       estoque,
+      tipos_bonificacao: tiposBonificacao,
+      centros_custo: centrosCusto,
+      destaques,
+      incentivos,
+      feriados,
+      visitas,
     };
 
     // conjuntos completos: so quando o sync correspondente rodou depois de `since`
@@ -109,6 +149,16 @@ export class SyncController {
       resposta.remessas = await this.rpcTodos('fn_remessas_da_rota', { p_rota: rota }, ['ordem', 'item', 'data_remessa']);
       completos.push('remessas');
     }
+    // historico longo (12 meses): totais prontos, so quando houve sync de pedidos (ou a carga historica) desde o ultimo pull
+    if ((await this.mudou('pedidos', rota, desde)) || (await this.mudou('historico', rota, desde))) {
+      resposta.historico_mes = await this.rpcTodos('fn_historico_cliente_mes', { p_rota: rota, p_meses: 12 }, ['cod_cliente', 'mes']);
+      resposta.historico_produto = await this.rpcTodos('fn_historico_cliente_produto', { p_rota: rota, p_meses: 12 }, ['cod_cliente', 'cod_produto']);
+    }
+
+    // parametros do painel que o app precisa conhecer (hoje: em que status o pedido pode ser cancelado)
+    const { data: par } = await this.sb.from('parametros').select('chave, valor').in('chave', ['status_cancelaveis']);
+    resposta.parametros = Object.fromEntries(((par ?? []) as Array<{ chave: string; valor: unknown }>).map((x) => [x.chave, x.valor]));
+
     resposta.completos = completos;
 
     return resposta;
@@ -129,6 +179,23 @@ export class SyncController {
     const resultados = await this.sync.sincronizarOperacional(v.codVendedor, rota);
 
     return { rota, sincronizadoEm: new Date().toISOString(), resultados };
+  }
+
+  /**
+   * Busca UMA ordem no SAP agora (cabecalho + itens) e devolve no formato do pull.
+   * Usado logo depois de criar o pedido, para o vendedor ver como ficou sem esperar a proxima sincronizacao.
+   */
+  @Post('ordem/:ordem')
+  async ordem(@VendedorLogado() v: Logado, @Param('ordem') ordem: string) {
+    if (!/^\d{1,10}$/.test(ordem)) throw new BadRequestException('Numero de ordem invalido');
+    let r;
+    try {
+      r = await this.sync.sincronizarOrdem(v.codVendedor, ordem);
+    } catch (e) {
+      throw new BadGatewayException(`SAP nao respondeu: ${(e as Error).message}`);
+    }
+    if (!r) throw new NotFoundException('Ordem ainda nao encontrada no SAP');
+    return { pedido: r.pedido, itens: r.itens };
   }
 
   /** Houve sync bem-sucedido do recurso depois de `since`? (sem `since`: sempre) */

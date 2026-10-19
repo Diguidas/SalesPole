@@ -1,11 +1,15 @@
-import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadGatewayException, ConflictException, ForbiddenException, Inject, Injectable, Logger, NotFoundException, UnprocessableEntityException,
+} from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { normCod, VendedorLogado } from '../auth/vendedores.service';
 import { SapClient } from '../sap/sap.client';
-import { SapCriarPedidoResp } from '../sap/sap.types';
+import { SapCancelarResp, SapCriarPedidoResp } from '../sap/sap.types';
 import { SUPABASE } from '../supabase/supabase.module';
 import { classificar, Desfecho, MAX_TENTATIVAS, OrdemSap, proximaTentativa } from './pedido.desfecho';
 import { conferirPreco, tabelaDoItem, type DadosProdutoSrv, type LinhaPrecoSrv } from './pedido.preco';
+import { aposCorte, feriadosDoLocal, type FeriadoRow } from './pedido.entrega';
+import { descontoLiberadoPeloIncentivo, incentivoAplicavel, type IncentivoRow } from './pedido.incentivo';
 import { hashItens, PedidoEntrada, validarPedido } from './pedido.validacao';
 
 export interface PedidoRow {
@@ -19,6 +23,11 @@ export interface PedidoRow {
   ordem_compra_cliente: string | null;
   endereco_entrega: string | null;
   observacao: string | null;
+  tipo: string;
+  tipo_bonificacao: string | null;
+  centro_custo: string | null;
+  justificativa: string | null;
+  motivo_rejeicao: string | null;
   itens: Array<{ produto: string; unidade: string; quantidade: string; preco: string | null }>;
   itens_hash: string;
   status: string;
@@ -29,7 +38,7 @@ export interface PedidoRow {
 
 export interface ResultadoPush {
   id: string | null;
-  /** recebido | enviando | enviado | parcial | erro | invalido | conflito */
+  /** recebido | aguardando_aprovacao | aprovado | rejeitado | enviando | enviado | parcial | erro | invalido | conflito */
   status: string;
   codigo?: string;
   ordens?: OrdemSap[];
@@ -85,12 +94,15 @@ export class PedidosService {
     let novo = false;
     if (!row) {
       novo = true;
-      const errosPreco = await this.conferirDescontos(p, codCliente);
+      const errosBonif = await this.conferirBonificacao(p);
+      if (errosBonif.length) return { id: p.id, status: 'invalido', erros: errosBonif };
+      const errosPreco = await this.conferirDescontos(p, codCliente, v.codVendedor);
       if (errosPreco.length) return { id: p.id, status: 'invalido', erros: errosPreco };
       await this.inserir(v, p, codCliente);
       row = await this.buscar(p.id);
       if (!row) throw new Error('pedido nao encontrado apos inserir');
-      await this.evento(p.id, 'recebido', { itens: p.itens.length, vendedor: v.codVendedor });
+      await this.evento(p.id, 'recebido', { itens: p.itens.length, vendedor: v.codVendedor, tipo: p.tipo });
+      if (p.tipo === 'bonificacao') await this.evento(p.id, 'aguardando_aprovacao', { tipo_bonificacao: p.tipoBonificacao, centro_custo: p.centroCusto });
     }
 
     if (row.status !== 'enviado' && Date.now() < prazoAte) {
@@ -108,7 +120,22 @@ export class PedidosService {
    * (sem preco vigente, unidade sem conversao, cliente sem area) o item nao e barrado: pedido feito
    * offline com tabela antiga nao pode ser recusado por falta de dado.
    */
-  async conferirDescontos(p: PedidoEntrada, codCliente: string): Promise<string[]> {
+  /** Bonificacao: o tipo e o centro de custo precisam existir (e estar ativos) no cadastro do painel. */
+  async conferirBonificacao(p: PedidoEntrada): Promise<string[]> {
+    if (p.tipo !== 'bonificacao') return [];
+    const [{ data: t, error: eT }, { data: c, error: eC }] = await Promise.all([
+      this.sb.from('bonificacao_tipos').select('codigo').eq('codigo', p.tipoBonificacao).eq('ativo', true).maybeSingle(),
+      this.sb.from('centros_custo').select('codigo').eq('codigo', p.centroCusto).eq('ativo', true).maybeSingle(),
+    ]);
+    if (eT) throw eT;
+    if (eC) throw eC;
+    const erros: string[] = [];
+    if (!t) erros.push(`tipo de bonificacao ${p.tipoBonificacao} nao cadastrado. Sincronize para atualizar a lista.`);
+    if (!c) erros.push(`centro de custo ${p.centroCusto} nao cadastrado. Sincronize para atualizar a lista.`);
+    return erros;
+  }
+
+  async conferirDescontos(p: PedidoEntrada, codCliente: string, codVendedor: string): Promise<string[]> {
     const comPreco = p.itens.filter((i) => i.preco !== null);
     if (!comPreco.length) return [];
 
@@ -116,6 +143,7 @@ export class PedidosService {
     if (eCli) throw eCli;
     const areas = ((cli as { areas?: unknown } | null)?.areas ?? []) as Array<{
       tipo_material?: string; lista_preco?: { codigo?: string } | null; rede?: { codigo?: string } | null;
+      canal?: { codigo?: string } | null; escritorio?: { codigo?: string } | null;
     }>;
 
     const codigos = [...new Set(comPreco.map((i) => i.produto))];
@@ -124,6 +152,21 @@ export class PedidosService {
     const porProduto = new Map(
       ((prods ?? []) as Array<{ cod_produto: string; tipo_material: string | null; dados: DadosProdutoSrv | null }>).map((x) => [x.cod_produto, x]),
     );
+
+    // desconto por incentivo: libera desconto alem do maximo da lista (regras do painel, por quantidade)
+    const { data: inc, error: eInc } = await this.sb
+      .from('incentivos_desconto')
+      .select('id,cod_produto,escopo,escopo_valor,linha_id,grupo_id,categoria_id,marca,qtd_minima,desconto_pct,desconto_extra_max_pct,vigencia_ini,vigencia_fim,ativo')
+      .eq('ativo', true); // tabela pequena: o filtro por produto/escopo e feito em incentivoAplicavel
+    if (eInc) throw eInc;
+    const incentivos = (inc ?? []) as IncentivoRow[];
+    const ctxInc = {
+      codCliente,
+      codVendedor,
+      canais: [...new Set(areas.map((a) => a.canal?.codigo).filter((x): x is string => !!x))],
+      escritorios: [...new Set(areas.map((a) => a.escritorio?.codigo).filter((x): x is string => !!x))],
+      hoje: dataSP(new Date().toISOString()),
+    };
 
     const pltyps = [...new Set(areas.map((a) => a.lista_preco?.codigo).filter((x): x is string => !!x))];
     if (!pltyps.length) return [];
@@ -155,10 +198,78 @@ export class PedidosService {
         prod.dados ?? {},
       );
       if (!tabela) continue;
-      const msg = conferirPreco(Number(i.preco), tabela);
+      const extra = descontoLiberadoPeloIncentivo(incentivoAplicavel(incentivos, i.produto, Number(i.quantidade), ctxInc, prod.dados?.classificacao));
+      const msg = conferirPreco(Number(i.preco), { ...tabela, descontoMax: tabela.descontoMax + extra });
       if (msg) erros.push(`produto ${i.produto}: ${msg}. Sincronize para atualizar os precos.`);
     }
     return erros;
+  }
+
+  /**
+   * Cancela uma ordem do SAP a pedido do vendedor. So pode cancelar ordem da carteira dele, em um status que o
+   * painel liberou (parametros.status_cancelaveis; vazio = desligado). O SAP ainda confere se ja foi faturada.
+   * Toda tentativa fica em pedido_cancelamentos.
+   */
+  async cancelarOrdemSap(v: VendedorLogado, ordemRaw: string, motivo?: string | null, por?: string | null): Promise<{ status: 'cancelado'; ordem: string; mensagem: string }> {
+    const ordem = (ordemRaw ?? '').trim();
+    if (!/^\d{1,10}$/.test(ordem)) throw new UnprocessableEntityException('Numero de ordem invalido');
+    if (!v.rota) throw new ForbiddenException('Sincronize antes de cancelar pedidos');
+
+    const { data: par, error: eP } = await this.sb.from('parametros').select('valor').eq('chave', 'status_cancelaveis').maybeSingle();
+    if (eP) throw eP;
+    const liberados = (Array.isArray((par as { valor?: unknown } | null)?.valor) ? ((par as { valor: unknown[] }).valor) : [])
+      .map((x) => String(x).trim().toLowerCase())
+      .filter(Boolean);
+    if (!liberados.length) throw new ForbiddenException('O cancelamento de pedidos pelo app nao esta habilitado');
+
+    const { data: o, error: eO } = await this.sb.from('pedidos_sap').select('ordem, cod_cliente, status').eq('ordem', ordem).maybeSingle();
+    if (eO) throw eO;
+    const ordemRow = o as { ordem: string; cod_cliente: string; status: string | null } | null;
+    if (!ordemRow) throw new NotFoundException('Pedido nao encontrado');
+
+    const { data: naCarteira, error: eC } = await this.sb
+      .from('rota_clientes').select('cod_cliente').eq('rota', v.rota).eq('cod_cliente', ordemRow.cod_cliente).limit(1);
+    if (eC) throw eC;
+    if (!naCarteira?.length) throw new ForbiddenException('Pedido fora da carteira do vendedor');
+
+    const statusAntes = ordemRow.status ?? '';
+    if (!liberados.includes(statusAntes.trim().toLowerCase())) {
+      throw new ConflictException(`Pedido com status "${statusAntes || 'sem status'}" nao pode ser cancelado pelo app`);
+    }
+
+    const auditar = async (resultado: 'cancelado' | 'recusado' | 'erro', http: number, mensagens: unknown) => {
+      const { error } = await this.sb.from('pedido_cancelamentos').insert({
+        ordem, cod_vendedor: v.codVendedor, status_antes: statusAntes, motivo: motivo?.trim().slice(0, 300) || null, resultado, http, mensagens, por: por ?? null,
+      });
+      if (error) this.logger.warn(`auditoria do cancelamento da ordem ${ordem} nao gravada: ${error.message}`);
+    };
+
+    let r: { status: number; data: SapCancelarResp };
+    try {
+      r = await this.sap.postComStatus<SapCancelarResp>('cancelar_pedido', { codvendedor: v.codVendedor, ordem });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message.slice(0, 500) : String(e);
+      await auditar('erro', 0, [{ tipo: 'E', mensagem: msg }]);
+      throw new BadGatewayException('O SAP nao respondeu. Tente de novo em instantes.');
+    }
+
+    const textos = [r.data.erro, ...(r.data.mensagens ?? []).map((m) => m.mensagem)].filter((x): x is string => !!x);
+    const detalhe = textos.join(' ') || `Erro ${r.status} no SAP`;
+
+    if (r.status === 200 && r.data.cancelado === 'true') {
+      // o SAP recusa todos os itens: reflete ja no Supabase (o proximo sync confirma o status real)
+      await this.sb.from('pedidos_sap').update({ status: 'Recusado' }).eq('ordem', ordem);
+      await auditar('cancelado', r.status, r.data.mensagens ?? []);
+      this.logger.log(`Ordem ${ordem} cancelada por ${v.codVendedor} (status antes: ${statusAntes})`);
+      return { status: 'cancelado', ordem, mensagem: 'Pedido cancelado.' };
+    }
+
+    await auditar(r.status === 409 || r.status === 403 || r.status === 404 ? 'recusado' : 'erro', r.status, r.data.mensagens ?? [r.data.erro ?? null]);
+    if (r.status === 409) throw new ConflictException(detalhe);
+    if (r.status === 403) throw new ForbiddenException(detalhe);
+    if (r.status === 404) throw new NotFoundException(detalhe);
+    if (r.status === 422) throw new UnprocessableEntityException(detalhe);
+    throw new BadGatewayException(detalhe);
   }
 
   /** Vendedor pede para reenviar um pedido em 'erro' (depois de corrigir o problema). */
@@ -184,7 +295,7 @@ export class PedidosService {
     let desfecho: Desfecho;
     let mensagens: unknown;
     try {
-      const r = await this.sap.postComStatus<SapCriarPedidoResp>('criar_pedido', this.corpoSap(row));
+      const r = await this.sap.postComStatus<SapCriarPedidoResp>('criar_pedido', await this.corpoSap(row));
       http = r.status;
       mensagens = r.data.mensagens;
       desfecho = classificar(r.status, r.data);
@@ -208,7 +319,24 @@ export class PedidosService {
 
   // ---------------------------------------------------------------------
 
-  private corpoSap(row: PedidoRow) {
+  /**
+   * Feriados (nacional + estado + cidade do cliente) para o SAP nao marcar a entrega neles.
+   * Se a consulta falhar, segue sem feriados: nao pode travar o envio do pedido.
+   */
+  private async feriadosDoCliente(row: PedidoRow): Promise<string[]> {
+    try {
+      const hoje = dataSP(new Date().toISOString());
+      const { data: cli } = await this.sb.from('clientes').select('endereco').eq('cod_cliente', row.cod_cliente).maybeSingle();
+      const end = ((cli as { endereco?: { uf?: string; cidade?: string } } | null)?.endereco ?? {}) as { uf?: string; cidade?: string };
+      const { data } = await this.sb.from('feriados').select('data, uf, cidade').eq('ativo', true).gte('data', hoje);
+      return feriadosDoLocal((data ?? []) as FeriadoRow[], end.uf, end.cidade).slice(0, 60);
+    } catch (e) {
+      this.logger.warn(`feriados nao consultados (${(e as Error).message}): seguindo sem eles`);
+      return [];
+    }
+  }
+
+  private async corpoSap(row: PedidoRow) {
     return {
       codvendedor: row.cod_vendedor,
       codigocli: row.cod_cliente,
@@ -219,6 +347,13 @@ export class PedidosService {
       ordem_compra_cliente: row.ordem_compra_cliente ?? '',
       endereco_entrega: row.endereco_entrega ?? '',
       observacao: row.observacao ?? '',
+      // pedido feito depois da hora de corte (17h) conta como do dia seguinte; entrega nunca cai em feriado
+      apos_corte: aposCorte(row.criado_no_app_em) ? 'true' : 'false',
+      feriados: await this.feriadosDoCliente(row),
+      // bonificacao: o SAP cria a ordem Z011 com tipo (ORD_REASON) e centro de custo. A justificativa NAO vai.
+      tipo: row.tipo ?? 'venda',
+      tipo_bonificacao: row.tipo === 'bonificacao' ? (row.tipo_bonificacao ?? '') : '',
+      centro_custo: row.tipo === 'bonificacao' ? (row.centro_custo ?? '') : '',
       itens: row.itens.map((i) => ({
         produto: i.produto,
         unidade: i.unidade,
@@ -287,6 +422,12 @@ export class PedidosService {
         ordem_compra_cliente: p.ordemCompraCliente,
         endereco_entrega: p.enderecoEntrega,
         observacao: p.observacao,
+        tipo: p.tipo,
+        tipo_bonificacao: p.tipoBonificacao,
+        centro_custo: p.centroCusto,
+        justificativa: p.justificativa,
+        // bonificacao nao vai ao SAP sozinha: espera a aprovacao (mudar o status para 'aprovado')
+        status: p.tipo === 'bonificacao' ? 'aguardando_aprovacao' : 'recebido',
         itens: p.itens,
         itens_hash: hashItens(codCliente, p.itens),
         duplicado_de: duplicadoDe,
