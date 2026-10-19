@@ -21,6 +21,10 @@ async function bootstrap() {
     next();
   });
 
+  // painel web (React) em outro endereco: PAINEL_ORIGENS=https://painel.exemplo.com,http://localhost:5173
+  const origens = (process.env.PAINEL_ORIGENS ?? '').split(',').map((o) => o.trim()).filter(Boolean);
+  if (origens.length) app.enableCors({ origin: origens, methods: ['GET', 'POST'], allowedHeaders: ['Authorization', 'Content-Type'] });
+
   app.enableShutdownHooks();
   await app.listen(process.env.PORT ?? 3000);
 }

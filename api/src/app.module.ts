@@ -7,6 +7,8 @@ import { SapModule } from './sap/sap.module';
 import { AuthModule } from './auth/auth.module';
 import { SyncModule } from './sync/sync.module';
 import { PedidosModule } from './pedidos/pedidos.module';
+import { VisitasModule } from './visitas/visitas.module';
+import { PainelModule } from './painel/painel.module';
 
 @Module({
   imports: [
@@ -17,6 +19,8 @@ import { PedidosModule } from './pedidos/pedidos.module';
     AuthModule,
     SyncModule,
     PedidosModule,
+    VisitasModule,
+    PainelModule,
   ],
 })
 export class AppModule {}
