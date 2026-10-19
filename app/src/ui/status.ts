@@ -15,6 +15,9 @@ export const TOM_STATUS: Record<string, Tom> = {
   recebido: 'aviso',
   enviando: 'aviso',
   parcial: 'aviso',
+  aguardando_aprovacao: 'aviso',
+  aprovado: 'aviso',
+  rejeitado: 'erro',
   enviado: 'ok',
   erro: 'erro',
 };
@@ -26,6 +29,9 @@ export const ROTULO_APP: Record<string, string> = {
   recebido: 'Enviando ao SAP',
   enviando: 'Enviando ao SAP',
   parcial: 'Parcialmente enviado',
+  aguardando_aprovacao: 'Aguardando aprovação',
+  aprovado: 'Aprovado · enviando ao SAP',
+  rejeitado: 'Rejeitado',
   erro: 'Erro no envio',
   enviado: 'Enviado',
 };

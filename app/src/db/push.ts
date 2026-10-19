@@ -19,6 +19,11 @@ function paraApi(p: PedidoApp) {
     endereco_entrega: p.endereco_entrega,
     observacao: p.observacao,
     duplicado_de: p.duplicado_de,
+    // bonificacao fica 'aguardando aprovacao' no servidor; a justificativa so serve a quem aprova
+    tipo: p.tipo,
+    tipo_bonificacao: p.tipo_bonificacao,
+    centro_custo: p.centro_custo,
+    justificativa: p.justificativa,
     // preco = por CAIXA (vira ZPR2); sem preco o SAP usa a lista
     itens: p.itens.map((i) => ({ produto: i.produto, unidade: i.unidade, quantidade: i.quantidade, preco: i.preco ?? null })),
   };

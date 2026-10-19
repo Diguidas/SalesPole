@@ -15,12 +15,16 @@ interface Props {
   /** desconto maximo (%) da lista de preco; 0/ausente = o campo de desconto nem aparece */
   descontoMax?: number;
   descontoInicial?: number | null;
+  /** maximo do desconto do vendedor para a quantidade digitada (inclui o extra liberado por incentivo); substitui descontoMax */
+  maxPorQuantidade?: (quantidade: number) => number;
+  /** texto extra sobre o desconto para a quantidade digitada (ex.: incentivo aplicado) */
+  dicaDesconto?: (quantidade: number) => string | null;
   onConfirmar: (quantidade: number, desconto: number) => void;
   onCancelar: () => void;
 }
 
 /** Digitar quantidade com validacao na hora (minimo e multiplo do produto). */
-export function ModalQuantidade({ visivel, titulo, unidade, inicial, regra, confirmarTexto = 'Confirmar', descontoMax = 0, descontoInicial, onConfirmar, onCancelar }: Props) {
+export function ModalQuantidade({ visivel, titulo, unidade, inicial, regra, confirmarTexto = 'Confirmar', descontoMax = 0, descontoInicial, maxPorQuantidade, dicaDesconto, onConfirmar, onCancelar }: Props) {
   const [texto, setTexto] = useState(inicial);
   const [descTexto, setDescTexto] = useState('');
   const [erro, setErro] = useState<string | null>(null);
@@ -33,14 +37,19 @@ export function ModalQuantidade({ visivel, titulo, unidade, inicial, regra, conf
     }
   }, [visivel, inicial, descontoInicial]);
 
+  // quantidade que esta digitada agora (0 se ainda invalida): o incentivo por quantidade depende dela
+  const qDigitada = lerQuantidade(texto) ?? 0;
+  const maxDesc = maxPorQuantidade ? maxPorQuantidade(qDigitada) : descontoMax;
+  const dicaDesc = dicaDesconto ? dicaDesconto(qDigitada) : null;
+
   function confirmar() {
     const q = lerQuantidade(texto);
     if (q === null) return setErro('Informe uma quantidade válida (até 3 casas decimais).');
     const problema = validarQuantidade(q, regra);
     if (problema) return setErro(problema);
-    const d = descontoMax > 0 ? lerDesconto(descTexto) : 0;
+    const d = maxDesc > 0 ? lerDesconto(descTexto) : 0;
     if (d === null) return setErro('Desconto inválido (use um percentual, até 2 casas decimais).');
-    const msgDesc = validarDesconto(d, descontoMax);
+    const msgDesc = validarDesconto(d, maxDesc);
     if (msgDesc) return setErro(msgDesc);
     onConfirmar(q, d);
   }
@@ -66,7 +75,7 @@ export function ModalQuantidade({ visivel, titulo, unidade, inicial, regra, conf
             />
             <Text style={estilos.unidade}>{unidade || 'un'}</Text>
           </View>
-          {descontoMax > 0 ? (
+          {maxDesc > 0 ? (
             <View style={estilos.linha}>
               <TextInput
                 style={[estilos.campo, { fontSize: 18 }]}
@@ -83,7 +92,8 @@ export function ModalQuantidade({ visivel, titulo, unidade, inicial, regra, conf
               <Text style={estilos.unidade}>%</Text>
             </View>
           ) : null}
-          {descontoMax > 0 ? <Text style={estilos.dica}>desconto máximo {Math.round(descontoMax * 100) / 100}%</Text> : null}
+          {maxDesc > 0 ? <Text style={estilos.dica}>desconto máximo {Math.round(maxDesc * 100) / 100}%</Text> : null}
+          {dicaDesc ? <Text style={estilos.dica}>{dicaDesc}</Text> : null}
           {regra.minimo || (regra.multiplo && regra.multiplo !== 1) ? (
             <Text style={estilos.dica}>
               {[regra.minimo ? `mínimo ${regra.minimo}` : null, regra.multiplo && regra.multiplo !== 1 ? `múltiplo de ${regra.multiplo}` : null]

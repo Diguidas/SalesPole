@@ -1,12 +1,15 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Alert, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useDados } from '@/db/hooks';
-import { duplicarPedidoSap } from '@/db/pedidos';
+import { duplicarPedidoSap, marcarOrdemCancelada, statusCancelaveis } from '@/db/pedidos';
+import { buscarOrdemNoSap } from '@/db/sync';
 import { itensDoPedidoSap, obterPedidoSap, pedidoAppDaOrdem } from '@/db/queries';
+import { api } from '@/lib/api';
 import { dataBR, moeda, numero } from '@/lib/format';
+import { useSync } from '@/lib/sync-context';
 import { Botao, Card, Carregando, Linha, Secao, Selo, Vazio } from '@/ui/components';
 import { seloDoPedido } from '@/ui/status';
 import { cor, espaco } from '@/ui/theme';
@@ -17,15 +20,66 @@ export default function PedidoSapTela() {
   const db = useSQLiteContext();
   const router = useRouter();
 
-  const { dados: p, carregando } = useDados((d) => obterPedidoSap(d, ordem), [ordem]);
-  const { dados: itens } = useDados((d) => itensDoPedidoSap(d, ordem), [ordem]);
+  const { sincronizar } = useSync();
+  const [cancelando, setCancelando] = useState(false);
+  const [recarga, setRecarga] = useState(0);
+
+  const { dados: p, carregando } = useDados((d) => obterPedidoSap(d, ordem), [ordem, recarga]);
+  const { dados: cancelaveis } = useDados(statusCancelaveis, []);
+  const { dados: itens } = useDados((d) => itensDoPedidoSap(d, ordem), [ordem, recarga]);
   // ordem recem-criada pelo app: ainda nao veio do SAP no sync, mas o pedido local ja a conhece
   const { dados: idLocal } = useDados((d) => (p ? Promise.resolve(null) : pedidoAppDaOrdem(d, ordem)), [ordem, p, carregando]);
+
+  // Nao redireciona para o pedido do app: a tela do pedido tem o botao "Ordens no SAP" que abre ESTA tela (virava um loop).
+  // Em vez disso busca os dados no SAP (1 vez, sozinho) e, se ainda nao vieram, explica e deixa tentar de novo.
+  const [buscando, setBuscando] = useState(false);
+  const [erroBusca, setErroBusca] = useState<string | null>(null);
+  const tentouSozinho = useRef(false);
+  async function buscarNoSap() {
+    setBuscando(true);
+    setErroBusca(null);
+    try {
+      await buscarOrdemNoSap(db, ordem); // pergunta so por ESTA ordem ao SAP (segundos), sem sincronizar tudo
+      setRecarga((r) => r + 1);
+    } catch (e) {
+      setErroBusca(e instanceof Error ? e.message : 'Não foi possível buscar agora.');
+    } finally {
+      setBuscando(false);
+    }
+  }
   useEffect(() => {
-    if (!carregando && !p && idLocal) router.replace(`/pedido/${idLocal}`);
-  }, [carregando, p, idLocal, router]);
+    if (!carregando && !p && idLocal && !tentouSozinho.current) {
+      tentouSozinho.current = true;
+      void buscarNoSap();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [carregando, p, idLocal]);
 
   if (carregando) return <Carregando />;
+  if (!p && idLocal) {
+    return (
+      <ScrollView contentContainerStyle={estilos.conteudo}>
+        <Stack.Screen options={{ title: `Pedido ${ordem}` }} />
+        <Card style={{ gap: espaco.sm }}>
+          <Text style={estilos.cliente}>Ordem {ordem}</Text>
+          <View style={estilos.selos}>
+            <Selo texto="Criada pelo app" tom="ok" />
+          </View>
+          <Text style={estilos.itemSuave}>
+            {buscando
+              ? 'Buscando os dados desta ordem no SAP…'
+              : erroBusca
+                ? `Não consegui buscar agora: ${erroBusca}`
+                : 'Os dados desta ordem (status, itens finais, valores e notas fiscais) ainda não chegaram a este aparelho.'}
+          </Text>
+        </Card>
+        <View style={{ marginTop: espaco.md, gap: espaco.sm }}>
+          <Botao titulo="Buscar os dados no SAP agora" onPress={buscarNoSap} carregando={buscando} />
+          <Botao titulo="Voltar ao pedido" onPress={() => router.back()} tom="neutro" />
+        </View>
+      </ScrollView>
+    );
+  }
   if (!p) {
     return (
       <View style={{ flex: 1, justifyContent: 'center' }}>
@@ -36,6 +90,33 @@ export default function PedidoSapTela() {
 
   const selo = seloDoPedido('sap', p.status);
   const abrir = (url: string | null) => url && Linking.openURL(url).catch(() => Alert.alert('Não foi possível abrir o link.'));
+
+  // o painel decide em quais status o pedido pode ser cancelado; o SAP ainda recusa ordem ja faturada
+  const podeCancelar = (cancelaveis ?? []).includes((p.status ?? '').trim().toLowerCase());
+
+  function cancelar() {
+    Alert.alert('Cancelar este pedido?', `O pedido ${p!.ordem} será cancelado no SAP. Isso não pode ser desfeito.`, [
+      { text: 'Voltar', style: 'cancel' },
+      {
+        text: 'Cancelar pedido',
+        style: 'destructive',
+        onPress: async () => {
+          setCancelando(true);
+          try {
+            await api(`/pedidos/sap/${ordem}/cancelar`, { method: 'POST', body: {}, timeoutMs: 60_000 });
+            await marcarOrdemCancelada(db, ordem);
+            setRecarga((r) => r + 1);
+            Alert.alert('Pedido cancelado', 'O cancelamento foi feito no SAP.');
+            void sincronizar(); // traz o status confirmado
+          } catch (e) {
+            Alert.alert('Não foi possível cancelar', e instanceof Error ? e.message : 'Tente de novo.');
+          } finally {
+            setCancelando(false);
+          }
+        },
+      },
+    ]);
+  }
 
   async function duplicar() {
     const novo = await duplicarPedidoSap(db, ordem);
@@ -104,6 +185,11 @@ export default function PedidoSapTela() {
 
       <View style={{ marginTop: espaco.lg }}>
         <Botao titulo="Duplicar pedido" onPress={duplicar} tom="neutro" desabilitado={!itens?.length} />
+        {podeCancelar ? (
+          <View style={{ marginTop: espaco.sm }}>
+            <Botao titulo="Cancelar pedido" onPress={cancelar} tom="perigo" carregando={cancelando} />
+          </View>
+        ) : null}
       </View>
     </ScrollView>
   );

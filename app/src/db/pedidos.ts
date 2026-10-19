@@ -9,7 +9,7 @@ export interface PedidoApp {
   id: string;
   codigo: string | null; // sequencial definitivo (so existe depois que o servidor recebe)
   cod_cliente: string;
-  /** rascunho | pendente | recebido | enviando | parcial | enviado | erro */
+  /** rascunho | pendente | recebido | aguardando_aprovacao | aprovado | rejeitado | enviando | parcial | enviado | erro */
   status: string;
   criado_em: string;
   dt_entrega: string | null;
@@ -17,6 +17,13 @@ export interface PedidoApp {
   ordem_compra_cliente: string | null;
   endereco_entrega: string | null;
   observacao: string | null;
+  /** venda | bonificacao (bonificacao so vai ao SAP depois de aprovada no painel) */
+  tipo: 'venda' | 'bonificacao';
+  tipo_bonificacao: string | null;
+  centro_custo: string | null;
+  /** so para quem aprova: nao vai ao SAP */
+  justificativa: string | null;
+  motivo_rejeicao: string | null;
   itens: ItemPedido[];
   duplicado_de: string | null;
   ordens_sap: Array<{ ordem: string; tipo_material: string; vkorg: string }>;
@@ -44,6 +51,11 @@ function paraPedido(r: Record<string, unknown>): PedidoApp {
     ordem_compra_cliente: (r.ordem_compra_cliente as string | null) ?? null,
     endereco_entrega: (r.endereco_entrega as string | null) ?? null,
     observacao: (r.observacao as string | null) ?? null,
+    tipo: r.tipo === 'bonificacao' ? 'bonificacao' : 'venda',
+    tipo_bonificacao: (r.tipo_bonificacao as string | null) ?? null,
+    centro_custo: (r.centro_custo as string | null) ?? null,
+    justificativa: (r.justificativa as string | null) ?? null,
+    motivo_rejeicao: (r.motivo_rejeicao as string | null) ?? null,
     itens: json<ItemPedido[]>(r.itens, []),
     duplicado_de: (r.duplicado_de as string | null) ?? null,
     ordens_sap: json(r.ordens_sap, []),
@@ -65,12 +77,15 @@ async function criarRascunho(
   codCliente: string,
   itens: ItemPedido[] = [],
   duplicadoDe: string | null = null,
+  extras: { tipo?: string; tipo_bonificacao?: string | null; centro_custo?: string | null; justificativa?: string | null } = {},
 ): Promise<string> {
   const id = Crypto.randomUUID();
   await db.runAsync(
-    `INSERT INTO pedidos_app (id, cod_cliente, status, criado_em, itens, duplicado_de, atualizado_em)
-     VALUES (?, ?, 'rascunho', ?, ?, ?, ?)`,
+    `INSERT INTO pedidos_app (id, cod_cliente, status, criado_em, itens, duplicado_de, atualizado_em,
+                              tipo, tipo_bonificacao, centro_custo, justificativa)
+     VALUES (?, ?, 'rascunho', ?, ?, ?, ?, ?, ?, ?, ?)`,
     id, codCliente, agora(), JSON.stringify(itens), duplicadoDe, agora(),
+    extras.tipo === 'bonificacao' ? 'bonificacao' : 'venda', extras.tipo_bonificacao ?? null, extras.centro_custo ?? null, extras.justificativa ?? null,
   );
   return id;
 }
@@ -122,6 +137,20 @@ export async function salvarCampos(
   );
 }
 
+/** Venda ou bonificacao (com tipo, centro de custo e justificativa). Em venda os campos de bonificacao sao limpos. */
+export async function salvarTipo(
+  db: SQLiteDatabase,
+  id: string,
+  t: { tipo: 'venda' | 'bonificacao'; tipo_bonificacao: string | null; centro_custo: string | null; justificativa: string | null },
+): Promise<void> {
+  const bon = t.tipo === 'bonificacao';
+  await db.runAsync(
+    `UPDATE pedidos_app SET tipo = ?, tipo_bonificacao = ?, centro_custo = ?, justificativa = ?, atualizado_em = ?
+      WHERE id = ? AND status = 'rascunho'`,
+    t.tipo, bon ? t.tipo_bonificacao : null, bon ? t.centro_custo : null, bon ? (t.justificativa?.trim() || null) : null, agora(), id,
+  );
+}
+
 /**
  * Confirma o pedido: vai para a fila de envio. A data da compra passa a ser AGORA (um rascunho
  * aberto ha dias nao pode levar a data antiga). So o envio ao servidor gera o codigo definitivo.
@@ -143,13 +172,20 @@ export async function descartarPedido(db: SQLiteDatabase, id: string): Promise<v
 export async function duplicarPedidoApp(db: SQLiteDatabase, id: string): Promise<string | null> {
   const p = await lerPedidoApp(db, id);
   if (!p) return null;
-  return criarRascunho(db, p.cod_cliente, p.itens, p.id);
+  return criarRascunho(db, p.cod_cliente, p.itens, p.id, {
+    tipo: p.tipo, tipo_bonificacao: p.tipo_bonificacao, centro_custo: p.centro_custo, justificativa: p.justificativa,
+  });
 }
 
 /** Duplica uma ordem que veio do SAP (itens recusados nao entram). */
 export async function duplicarPedidoSap(db: SQLiteDatabase, ordem: string): Promise<string | null> {
   const p = await db.getFirstAsync<{ cod_cliente: string }>('SELECT cod_cliente FROM pedidos_sap WHERE ordem = ?', ordem);
   if (!p) return null;
+  return criarRascunho(db, p.cod_cliente, await itensDaOrdemSap(db, ordem), null);
+}
+
+/** Itens de uma ordem do SAP prontos para o carrinho (recusados nao entram; unidade em CODIGO interno). */
+export async function itensDaOrdemSap(db: SQLiteDatabase, ordem: string): Promise<ItemPedido[]> {
   const itens = await db.getAllAsync<{ cod_produto: string | null; unidade_venda: string | null; quantidade: number | null }>(
     `SELECT cod_produto, unidade_venda, quantidade FROM pedido_itens_sap
       WHERE ordem = ? AND (cod_recusa IS NULL OR cod_recusa = '') ORDER BY item`,
@@ -165,7 +201,7 @@ export async function duplicarPedidoSap(db: SQLiteDatabase, ordem: string): Prom
     : [];
   const conversoes = new Map(dados.map((d) => [d.cod_produto, lerConversoes(json<DadosProduto>(d.dados, {}))]));
 
-  const lista: ItemPedido[] = itens
+  return itens
     .filter((i) => i.cod_produto && i.unidade_venda && i.quantidade && i.quantidade > 0)
     .map((i) => {
       const conv = conversoes.get(i.cod_produto!);
@@ -175,7 +211,22 @@ export async function duplicarPedidoSap(db: SQLiteDatabase, ordem: string): Prom
         quantidade: formatarQuantidade(i.quantidade!),
       };
     });
-  return criarRascunho(db, p.cod_cliente, lista, null);
+}
+
+/** O servidor cancelou a ordem no SAP: reflete no aparelho ja (o proximo sincronizar confirma o status real). */
+export async function marcarOrdemCancelada(db: SQLiteDatabase, ordem: string): Promise<void> {
+  await db.runAsync("UPDATE pedidos_sap SET status = 'Recusado' WHERE ordem = ?", ordem);
+}
+
+/** Status do SAP em que o painel liberou o cancelamento pelo app (minusculo, sem espaco nas pontas; vazio = desligado). */
+export async function statusCancelaveis(db: SQLiteDatabase): Promise<string[]> {
+  const r = await db.getFirstAsync<{ valor: string | null }>("SELECT valor FROM meta WHERE chave = 'status_cancelaveis'");
+  try {
+    const lista = JSON.parse(r?.valor ?? '[]') as unknown[];
+    return Array.isArray(lista) ? lista.map((x) => String(x).trim().toLowerCase()).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
 }
 
 /** Pedidos confirmados que ainda nao chegaram ao servidor, na ordem em que foram criados. */

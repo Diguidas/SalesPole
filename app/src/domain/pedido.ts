@@ -14,6 +14,10 @@ export interface ItemPedido {
   preco?: string | null;
   /** desconto em % dado pelo vendedor sobre o preco de tabela (limitado ao maximo da lista); ausente = sem desconto */
   desconto?: number | null;
+  /** parte do desconto dada pelo vendedor (o resto vem do incentivo por quantidade); ver incentivo.ts */
+  descontoManual?: number | null;
+  /** teto do desconto TOTAL deste item (lista + incentivo + extra) para a quantidade atual */
+  descontoLiberado?: number | null;
 }
 
 const mesmo = (i: ItemPedido, produto: string, unidade: string) => i.produto === produto && i.unidade === unidade;
@@ -23,7 +27,16 @@ export function adicionarItem(itens: ItemPedido[], novo: ItemPedido): ItemPedido
   const existente = itens.find((i) => mesmo(i, novo.produto, novo.unidade));
   if (!existente) return [...itens, novo];
   const soma = (lerQuantidade(existente.quantidade) ?? 0) + (lerQuantidade(novo.quantidade) ?? 0);
-  return itens.map((i) => (i === existente ? { ...i, quantidade: formatarQuantidade(soma), ...(novo.desconto ? { desconto: novo.desconto } : {}) } : i));
+  return itens.map((i) =>
+    i === existente
+      ? {
+          ...i,
+          quantidade: formatarQuantidade(soma),
+          ...(novo.desconto ? { desconto: novo.desconto } : {}),
+          ...(novo.descontoManual ? { descontoManual: novo.descontoManual } : {}),
+        }
+      : i,
+  );
 }
 
 export function definirQuantidade(itens: ItemPedido[], produto: string, unidade: string, quantidade: number): ItemPedido[] {
@@ -31,7 +44,7 @@ export function definirQuantidade(itens: ItemPedido[], produto: string, unidade:
 }
 
 export function definirDesconto(itens: ItemPedido[], produto: string, unidade: string, desconto: number): ItemPedido[] {
-  return itens.map((i) => (mesmo(i, produto, unidade) ? { ...i, desconto: desconto > 0 ? desconto : null } : i));
+  return itens.map((i) => (mesmo(i, produto, unidade) ? { ...i, desconto: desconto > 0 ? desconto : null, descontoManual: desconto > 0 ? desconto : null } : i));
 }
 
 export function removerItem(itens: ItemPedido[], produto: string, unidade: string): ItemPedido[] {
@@ -80,7 +93,9 @@ export function precoParaEnvio(preco: PrecoRef | undefined, unidade: string, des
 
 /** Preco por unidade do item ja com o desconto (o mesmo que vai no ZPR2). */
 export function precoUnitarioFinal(preco: PrecoRef, item: ItemPedido): number {
-  const d = item.desconto && item.desconto > 0 && validarDesconto(item.desconto, preco.descontoMax) === null ? item.desconto : 0;
+  // teto do item: o da lista, ou o maior liberado por incentivo por quantidade
+  const teto = Math.max(preco.descontoMax ?? 0, item.descontoLiberado ?? 0);
+  const d = item.desconto && item.desconto > 0 && validarDesconto(item.desconto, teto) === null ? item.desconto : 0;
   return aplicarDesconto(preco.valor, d);
 }
 

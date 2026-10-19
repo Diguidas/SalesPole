@@ -17,6 +17,10 @@ export interface AreaCliente {
   centro: string;
   lista_preco?: { codigo: string } | null;
   rede?: { codigo: string } | null;
+  cond_pagamento?: { codigo: string; descricao?: string } | null;
+  /** canal de venda (KNVV-VTWEG) e escritorio de vendas (KNVV-VKBUR): definem quais regras de incentivo valem */
+  canal?: { codigo: string } | null;
+  escritorio?: { codigo: string } | null;
 }
 
 /** Area do cliente que atende um tipo de material; null = o cliente nao compra esse tipo. */
@@ -84,6 +88,12 @@ export interface Conversoes {
 /** O que o SAP manda dentro de produtos.dados (campos de unidade podem faltar em dados antigos). */
 export interface DadosProduto {
   pedido?: { quantidademinima?: unknown; multiplo?: unknown };
+  classificacao?: {
+    marca?: string; categoria?: string; linha?: string; grupo?: string;
+    /** IDs do cadastro: as regras de incentivo do painel usam o ID */
+    categoria_id?: string; linha_id?: string; grupo_id?: string;
+  };
+  estoque?: { prazoentregadias?: unknown };
   unidade_base?: string | null;
   unidade_base_texto?: string | null;
   unidade_venda?: string | null;

@@ -30,7 +30,7 @@ export default function TabsLayout() {
       <Tabs.Screen name="index" options={{ ...aba('Início', 'home', 'home-outline'), headerTitle: 'Hoje' }} />
       <Tabs.Screen name="clientes" options={aba('Clientes', 'people', 'people-outline')} />
       <Tabs.Screen name="novo-pedido" options={aba('Novo pedido', 'add-circle', 'add-circle-outline')} />
-      <Tabs.Screen name="pedidos" options={{ ...aba('Pedidos', 'receipt', 'receipt-outline'), headerTitle: 'Pedidos e títulos' }} />
+      <Tabs.Screen name="pedidos" options={{ ...aba('Análise', 'bar-chart', 'bar-chart-outline'), headerTitle: 'Análise' }} />
       <Tabs.Screen name="perfil" options={aba('Perfil', 'person', 'person-outline')} />
     </Tabs>
   );

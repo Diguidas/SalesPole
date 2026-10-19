@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { proximaEntrega } from './entrega';
+import { prazoProducao, previsaoEntrega, proximaEntrega } from './entrega';
+import { avaliarCheckin, distanciaM, RAIO_VISITA_M, textoDistancia } from './geo';
+import { ajustarDescontos, descontoTotalMax, faixasDoProduto, incentivoAplicavel, maxManual, type ContextoIncentivo, type Incentivo } from './incentivo';
 import { arredondar } from './numero';
 import {
-  adicionarItem, aplicarDesconto, definirDesconto, definirQuantidade, estimarTotal, lerDesconto, precoParaEnvio, removerItem, validarDesconto,
+  adicionarItem, aplicarDesconto, definirDesconto, definirQuantidade, estimarTotal, lerDesconto, precoParaEnvio, precoUnitarioFinal, removerItem, validarDesconto,
   type ItemPedido,
 } from './pedido';
 import {
@@ -264,4 +266,223 @@ test('desconto: fica no item, soma no carrinho e entra no total estimado', () =>
   itens = definirDesconto(itens, '1', 'KI', 2);
   const r = estimarTotal(itens, { '1': { valor: 100, unidade: 'KI', descontoMax: 5 } });
   assert.equal(r.total, 294); // 3 x 98
+});
+
+// ---- prazo de producao na entrega ----
+test('entrega respeita o prazo de producao: cliente entrega ter+qui, compra na segunda', () => {
+  const seg = new Date(2026, 9, 19); // segunda 19/10/2026
+  assert.equal(proximaEntrega([2, 4], seg), '2026-10-20'); // prazo 1 (padrao): amanha
+  assert.equal(proximaEntrega([2, 4], seg, 1), '2026-10-20');
+  assert.equal(proximaEntrega([2, 4], seg, 2), '2026-10-22'); // terca ja nao da tempo de produzir
+  assert.equal(proximaEntrega([2], seg, 2), '2026-10-27');
+  assert.equal(proximaEntrega([], seg, 2), '2026-10-21'); // sem cadastro: seg-sab
+});
+
+test('prazo de producao do cadastro: ausente/invalido = 1', () => {
+  assert.equal(prazoProducao('2'), 2);
+  assert.equal(prazoProducao(1), 1);
+  assert.equal(prazoProducao(''), 1);
+  assert.equal(prazoProducao(undefined), 1);
+  assert.equal(prazoProducao('0'), 1);
+  assert.equal(prazoProducao('abc'), 1);
+});
+
+// ---- desconto por incentivo ----
+const ctx: ContextoIncentivo = { codCliente: '100', codVendedor: 'V1', canais: ['10'], escritorios: ['E1'] };
+const inc = (o: Partial<Incentivo>): Incentivo => ({
+  id: 'x', cod_produto: 'P1', escopo: 'geral', escopo_valor: null, qtd_minima: 10, desconto_pct: 4, desconto_extra_max_pct: 2, ...o,
+});
+
+test('incentivo so vale a partir da quantidade minima e escolhe a maior faixa atingida', () => {
+  const rows = [inc({ id: 'a', qtd_minima: 10, desconto_pct: 4 }), inc({ id: 'b', qtd_minima: 20, desconto_pct: 7 })];
+  assert.equal(incentivoAplicavel(rows, 'P1', 9, ctx), null);
+  assert.equal(incentivoAplicavel(rows, 'P1', 10, ctx)?.id, 'a');
+  assert.equal(incentivoAplicavel(rows, 'P1', 25, ctx)?.id, 'b');
+  assert.equal(incentivoAplicavel(rows, 'OUTRO', 25, ctx), null);
+});
+
+test('incentivo por escopo: cliente, vendedor, canal e escritorio so valem para quem e do escopo', () => {
+  const rows = [
+    inc({ id: 'cli', escopo: 'cliente', escopo_valor: '999' }),
+    inc({ id: 'ven', escopo: 'vendedor', escopo_valor: 'V2' }),
+    inc({ id: 'can', escopo: 'canal', escopo_valor: '20' }),
+    inc({ id: 'esc', escopo: 'escritorio', escopo_valor: 'E9' }),
+  ];
+  assert.equal(incentivoAplicavel(rows, 'P1', 50, ctx), null);
+  rows.push(inc({ id: 'canok', escopo: 'canal', escopo_valor: '10' }));
+  assert.equal(incentivoAplicavel(rows, 'P1', 50, ctx)?.id, 'canok');
+});
+
+test('incentivo: na mesma faixa vence o escopo mais especifico, e o com produto vence o sem produto', () => {
+  const rows = [
+    inc({ id: 'geral', escopo: 'geral' }),
+    inc({ id: 'canal', escopo: 'canal', escopo_valor: '10' }),
+    inc({ id: 'cliente', escopo: 'cliente', escopo_valor: '100' }),
+    inc({ id: 'semProduto', escopo: 'cliente', escopo_valor: '100', cod_produto: null }),
+  ];
+  assert.equal(incentivoAplicavel(rows, 'P1', 10, ctx)?.id, 'cliente');
+  assert.equal(incentivoAplicavel(rows.filter((r) => r.id !== 'cliente'), 'P1', 10, ctx)?.id, 'semProduto');
+  assert.deepEqual(faixasDoProduto(rows, 'P1', ctx).length, 4);
+});
+
+test('tetos: vendedor = lista + extra; total = lista + incentivo + extra', () => {
+  assert.equal(maxManual(3, null), 3);
+  assert.equal(maxManual(3, inc({})), 5); // 3 + 2 extra
+  assert.equal(descontoTotalMax(3, inc({})), 9); // 3 + 2 + 4
+  assert.equal(descontoTotalMax(0, null), 0);
+});
+
+test('ajustarDescontos: soma incentivo + parte do vendedor e respeita o teto na quantidade atual', () => {
+  const rows = [inc({ qtd_minima: 10, desconto_pct: 4, desconto_extra_max_pct: 2 })];
+  const item = (q: string, manual?: number): ItemPedido => ({ produto: 'P1', unidade: 'KI', quantidade: q, descontoManual: manual ?? null });
+  // lista permite 3%: com 10 caixas, incentivo 4% + vendedor 3% = 7%
+  const a = ajustarDescontos([item('10', 3)], { P1: 3 }, rows, ctx)[0];
+  assert.equal(a.desconto, 7); assert.equal(a.descontoManual, 3); assert.equal(a.descontoLiberado, 9);
+  // vendedor quer 10%: limitado a 3 + 2 = 5% -> total 9%
+  assert.equal(ajustarDescontos([item('10', 10)], { P1: 3 }, rows, ctx)[0].desconto, 9);
+  // baixou a quantidade: perde o incentivo; o vendedor volta ao maximo da lista (3%)
+  const b = ajustarDescontos([item('9', 5)], { P1: 3 }, rows, ctx)[0];
+  assert.equal(b.desconto, 3); assert.equal(b.descontoLiberado, 3);
+  // item antigo (so `desconto`): vira a parte do vendedor
+  assert.equal(ajustarDescontos([{ produto: 'P1', unidade: 'KI', quantidade: '1', desconto: 2 }], { P1: 3 }, rows, ctx)[0].descontoManual, 2);
+  // lista sem desconto e sem incentivo: tudo zera
+  const c = ajustarDescontos([item('1', 5)], { P1: 0 }, rows, ctx)[0];
+  assert.equal(c.desconto, null); assert.equal(c.descontoManual, null);
+});
+
+test('preco final aceita o desconto liberado pelo incentivo, mesmo acima do maximo da lista', () => {
+  const rows = [inc({ qtd_minima: 10, desconto_pct: 4, desconto_extra_max_pct: 2 })];
+  const [i] = ajustarDescontos([{ produto: 'P1', unidade: 'KI', quantidade: '10', descontoManual: 2 }], { P1: 0 }, rows, ctx);
+  assert.equal(i.desconto, 6); // 4% incentivo + 2% extra, com lista sem desconto
+  assert.equal(precoUnitarioFinal({ valor: 100, unidade: 'KI', descontoMax: 0 }, i), 94);
+  // sem o teto liberado o desconto seria ignorado (defesa)
+  assert.equal(precoUnitarioFinal({ valor: 100, unidade: 'KI', descontoMax: 0 }, { ...i, descontoLiberado: null }), 100);
+});
+
+test('incentivo por classificacao: ID da linha/grupo/categoria e marca (todos os preenchidos precisam bater; zeros a esquerda do ID nao importam)', () => {
+  const cls = { linha_id: '0003', grupo_id: '12', categoria_id: '0007', marca: 'Pole' };
+  const porLinha = inc({ id: 'linha', cod_produto: null, linha_id: '3' });
+  assert.equal(incentivoAplicavel([porLinha], 'PX', 10, ctx, cls)?.id, 'linha'); // '3' = '0003'
+  assert.equal(incentivoAplicavel([porLinha], 'PX', 10, ctx, { ...cls, linha_id: '4' }), null);
+  assert.equal(incentivoAplicavel([porLinha], 'PX', 10, ctx), null); // produto sem classificacao nao bate
+  // varios criterios juntos: todos precisam bater
+  const linhaEMarca = inc({ id: 'lm', cod_produto: null, linha_id: '0003', marca: 'POLE' });
+  assert.equal(incentivoAplicavel([linhaEMarca], 'PX', 10, ctx, cls)?.id, 'lm'); // marca sem diferenciar caixa
+  assert.equal(incentivoAplicavel([linhaEMarca], 'PX', 10, ctx, { ...cls, marca: 'Outra' }), null);
+  // cada dimensao sozinha
+  for (const campo of ['grupo_id', 'categoria_id', 'marca'] as const) {
+    const r = inc({ id: campo, cod_produto: null, [campo]: cls[campo] });
+    assert.equal(incentivoAplicavel([r], 'PX', 10, ctx, cls)?.id, campo);
+    assert.equal(incentivoAplicavel([r], 'PX', 10, ctx, { ...cls, [campo]: '999' }), null);
+  }
+  // o NOME da linha nao e criterio: so o ID
+  assert.equal(incentivoAplicavel([inc({ cod_produto: null, linha_id: '3' })], 'PX', 10, ctx, { linha: 'Premium' }), null);
+});
+
+test('incentivo: no empate, produto especifico > mais criterios de classificacao > menos criterios > qualquer produto', () => {
+  const cls = { linha_id: '3', grupo_id: '12' };
+  const rows = [
+    inc({ id: 'qualquer', cod_produto: null }),
+    inc({ id: 'linha', cod_produto: null, linha_id: '3' }),
+    inc({ id: 'linhaGrupo', cod_produto: null, linha_id: '3', grupo_id: '12' }),
+  ];
+  assert.equal(incentivoAplicavel(rows, 'PX', 10, ctx, cls)?.id, 'linhaGrupo');
+  assert.equal(incentivoAplicavel(rows.slice(0, 2), 'PX', 10, ctx, cls)?.id, 'linha');
+  assert.equal(incentivoAplicavel(rows.slice(0, 1), 'PX', 10, ctx, cls)?.id, 'qualquer');
+  rows.push(inc({ id: 'codigo', cod_produto: 'PX' }));
+  assert.equal(incentivoAplicavel(rows, 'PX', 10, ctx, cls)?.id, 'codigo');
+  // o escopo (quem compra) ainda manda mais que o alvo: regra do cliente vence a de produto especifico
+  rows.push(inc({ id: 'cli', cod_produto: null, escopo: 'cliente', escopo_valor: '100' }));
+  assert.equal(incentivoAplicavel(rows, 'PX', 10, ctx, cls)?.id, 'cli');
+  // quantidade minima maior vence tudo
+  rows.push(inc({ id: 'maior', cod_produto: null, qtd_minima: 50, desconto_pct: 1 }));
+  assert.equal(incentivoAplicavel(rows, 'PX', 60, ctx, cls)?.id, 'maior');
+});
+
+test('ajustarDescontos usa a classificacao de cada produto', () => {
+  const rows = [inc({ cod_produto: null, linha_id: '3', qtd_minima: 5, desconto_pct: 3, desconto_extra_max_pct: 0 })];
+  const itens: ItemPedido[] = [
+    { produto: 'A', unidade: 'KI', quantidade: '5' },
+    { produto: 'B', unidade: 'KI', quantidade: '5' },
+  ];
+  const r = ajustarDescontos(itens, {}, rows, ctx, { A: { linha_id: '0003' }, B: { linha_id: '4' } });
+  assert.equal(r[0].desconto, 3);
+  assert.equal(r[1].desconto, null);
+});
+
+test('incentivo sem quantidade minima (0): vale desde a primeira unidade; faixa maior ainda vence quando atingida', () => {
+  const fixo = inc({ id: 'fixo', cod_produto: null, marca: 'Pole', qtd_minima: 0, desconto_pct: 5, desconto_extra_max_pct: 0 });
+  const faixa = inc({ id: 'faixa', cod_produto: null, marca: 'Pole', qtd_minima: 20, desconto_pct: 8 });
+  const cls = { marca: 'Pole' };
+  assert.equal(incentivoAplicavel([fixo, faixa], 'PX', 1, ctx, cls)?.id, 'fixo');
+  assert.equal(incentivoAplicavel([fixo, faixa], 'PX', 0.5, ctx, cls)?.id, 'fixo');
+  assert.equal(incentivoAplicavel([fixo, faixa], 'PX', 20, ctx, cls)?.id, 'faixa');
+  assert.equal(incentivoAplicavel([fixo], 'PX', 1, ctx, { marca: 'Outra' }), null);
+  // escritorio + produto especifico, sem quantidade minima
+  const esc = inc({ id: 'esc', cod_produto: 'P1', escopo: 'escritorio', escopo_valor: 'E1', qtd_minima: 0, desconto_pct: 5, desconto_extra_max_pct: 2 });
+  assert.equal(incentivoAplicavel([esc], 'P1', 1, ctx)?.id, 'esc'); // ctx.escritorios = ['E1']
+  assert.equal(incentivoAplicavel([esc], 'P2', 1, ctx), null);
+  assert.equal(incentivoAplicavel([{ ...esc, escopo_valor: 'E9' }], 'P1', 1, ctx), null);
+});
+
+test('entrega: pedido depois das 17h conta como de amanha (corte)', () => {
+  const dias = [1, 2, 3, 4, 5, 6];
+  const seg10h = new Date(2026, 9, 19, 10, 0); // segunda 19/10/2026 10:00
+  const seg1659 = new Date(2026, 9, 19, 16, 59);
+  const seg17h = new Date(2026, 9, 19, 17, 0);
+  const seg18h = new Date(2026, 9, 19, 18, 30);
+  assert.deepEqual(previsaoEntrega(dias, seg10h), { data: '2026-10-20', aposCorte: false, feriadosPulados: [] });
+  assert.equal(previsaoEntrega(dias, seg1659).aposCorte, false);
+  assert.equal(previsaoEntrega(dias, seg17h).aposCorte, true); // 17:00 em ponto ja e depois do corte
+  assert.equal(previsaoEntrega(dias, seg18h).data, '2026-10-21'); // conta como terca: entrega na quarta
+  assert.equal(previsaoEntrega(dias, seg18h).aposCorte, true);
+  // sexta depois das 17h: conta como sabado; sabado e dia de entrega -> segunda? (sabado + 1 = domingo, sem entrega) -> segunda
+  const sex18h = new Date(2026, 9, 23, 18, 0);
+  assert.equal(previsaoEntrega(dias, sex18h).data, '2026-10-26');
+  // corte somado ao prazo de producao de 2 dias
+  assert.equal(previsaoEntrega(dias, seg18h, 2).data, '2026-10-22');
+});
+
+test('entrega: feriado nunca recebe entrega e e avisado', () => {
+  const dias = [1, 2, 3, 4, 5, 6];
+  const seg = new Date(2026, 10, 2, 10, 0); // segunda 02/11/2026 (Finados), 10h
+  // amanha (03/11) nao e feriado
+  assert.equal(previsaoEntrega(dias, seg).data, '2026-11-03');
+  // quinta 12/11 10h: amanha sexta 13 ok; mas se 13/11 for feriado vai para sabado 14
+  const quinta = new Date(2026, 10, 12, 10, 0);
+  const r = previsaoEntrega(dias, quinta, 1, new Set(['2026-11-13']));
+  assert.deepEqual(r, { data: '2026-11-14', aposCorte: false, feriadosPulados: ['2026-11-13'] });
+  // cliente entrega so ter e qui; quinta (feriado) pula para a terca seguinte
+  const seg19 = new Date(2026, 9, 19, 10, 0);
+  assert.equal(previsaoEntrega([2, 4], seg19, 2, new Set(['2026-10-22'])).data, '2026-10-27');
+  assert.deepEqual(previsaoEntrega([2, 4], seg19, 2, new Set(['2026-10-22'])).feriadosPulados, ['2026-10-22']);
+  // feriado em dia que o cliente nem recebe nao e "pulado" (nao interfere nem avisa)
+  assert.deepEqual(previsaoEntrega([2, 4], seg19, 1, new Set(['2026-10-21'])).feriadosPulados, []);
+  // proximaEntrega (sem corte) tambem respeita feriados
+  assert.equal(proximaEntrega(dias, new Date(2026, 9, 19), 1, new Set(['2026-10-20'])), '2026-10-21');
+});
+
+test('geo: distancia entre pontos (haversine) e texto', () => {
+  assert.equal(distanciaM(-16.6869, -49.2648, -16.6869, -49.2648), 0);
+  const cem = distanciaM(-16.6869, -49.2648, -16.6869 + 0.0009, -49.2648); // 0,0009 grau de latitude ~ 100 m
+  assert.ok(cem > 95 && cem < 105, String(cem));
+  const umKm = distanciaM(-23.55, -46.63, -23.55, -46.63 + 0.0098); // ~1 km em Sao Paulo
+  assert.ok(umKm > 950 && umKm < 1050, String(umKm));
+  assert.equal(textoDistancia(85), '85 m');
+  assert.equal(textoDistancia(1234), '1,2 km');
+  assert.equal(textoDistancia(null), '—');
+});
+
+test('geo: check-in avalia o raio de 150 m (so avisa) e cliente sem coordenada fica sem referencia', () => {
+  assert.equal(RAIO_VISITA_M, 150);
+  const cliente = { lat: -16.6869, lng: -49.2648 };
+  const perto = avaliarCheckin({ lat: -16.6869 + 0.0009, lng: -49.2648 }, cliente); // ~100 m
+  assert.equal(perto.foraDoRaio, false);
+  assert.equal(perto.semReferencia, false);
+  const longe = avaliarCheckin({ lat: -16.6869 + 0.0045, lng: -49.2648 }, cliente); // ~500 m
+  assert.equal(longe.foraDoRaio, true);
+  assert.ok(longe.distanciaM! > 450 && longe.distanciaM! < 550);
+  const limite = avaliarCheckin({ lat: -16.6869 + 0.00135, lng: -49.2648 }, cliente); // ~150 m
+  assert.ok(limite.distanciaM! >= 148 && limite.distanciaM! <= 152, String(limite.distanciaM));
+  assert.deepEqual(avaliarCheckin({ lat: 1, lng: 1 }, { lat: null, lng: null }), { distanciaM: null, foraDoRaio: false, semReferencia: true });
 });

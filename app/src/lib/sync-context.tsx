@@ -5,8 +5,9 @@ import {
 } from 'react';
 import { AppState } from 'react-native';
 import { enviarPendentes } from '@/db/push';
+import { enviarVisitas } from '@/db/visitasPush';
 import { executarPull, gravarMeta, lerMeta, limparBancoLocal } from '@/db/sync';
-import { ApiError } from './api';
+import { api, ApiError } from './api';
 import { useSession } from './auth';
 
 interface SyncCtx {
@@ -47,13 +48,18 @@ export function SyncProvider({ children }: { children: ReactNode }) {
         setErro('Sem conexão. Os dados mostrados são do último sincronismo.');
         return;
       }
-      // 1) envia os pedidos pendentes (o servidor devolve o codigo definitivo); 2) baixa as novidades
+      // 1) envia os pedidos pendentes (o servidor devolve o codigo definitivo);
+      // 2) pede ao servidor para buscar no SAP o que mudou (pedidos, titulos, remessas, estoque);
+      // 3) baixa as novidades. Sem o passo 2 o app so enxerga o que o job automatico (seg-sab, 6h-21h) ja trouxe.
       await enviarPendentes(db);
+      // visitas (check-in/check-out) e fotos: o que nao subir fica pendente e tenta de novo na proxima vez
+      await enviarVisitas(db).catch(() => undefined);
+      const aviso = await atualizarDoSap();
       await executarPull(db);
       const agora = (await lerMeta(db, 'ultimo_sync')) ?? new Date().toISOString();
       ultimoSyncRef.current = agora;
       setUltimoSync(agora);
-      setErro(null);
+      setErro(aviso);
       setVersao((v) => v + 1);
     } catch (e) {
       setErro(e instanceof ApiError || e instanceof Error ? e.message : 'Falha ao sincronizar.');
@@ -125,6 +131,22 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     [sincronizando, ultimoSync, erro, versao, sincronizar, enviarPedidos],
   );
   return <Ctx.Provider value={valor}>{children}</Ctx.Provider>;
+}
+
+/**
+ * Pede ao servidor para sincronizar com o SAP agora (POST /sync/refresh; no maximo 1x por minuto por vendedor).
+ * NUNCA derruba o sincronismo: se o servidor ou o SAP nao responderem, o app segue com o que o servidor ja tem
+ * e devolve um aviso (null = tudo certo). Recusa por excesso de pedidos (429) nao e problema: ja atualizou ha pouco.
+ */
+async function atualizarDoSap(): Promise<string | null> {
+  try {
+    const r = await api<{ resultados?: Array<{ ok: boolean }> }>('/sync/refresh', { method: 'POST', timeoutMs: 150_000 });
+    const falhas = (r.resultados ?? []).filter((x) => !x.ok).length;
+    return falhas ? 'O SAP não respondeu a tudo agora: alguns dados (pedidos, títulos, estoque) podem estar desatualizados.' : null;
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 429) return null;
+    return 'Não foi possível buscar as novidades no SAP agora: mostrando o que o servidor já tem.';
+  }
 }
 
 /** Garante que o banco local pertence ao usuario logado; se for outro, limpa. */

@@ -4,6 +4,8 @@ import {
   UNIDADE_PEDIDO_PADRAO,
   type AreaCliente, type DadosProduto, type GrupoMaterial, type LinhaPreco, type PrecoNaUnidade,
 } from '@/domain/preco';
+import { prazoProducao } from '@/domain/entrega';
+import type { Classificacao } from '@/domain/incentivo';
 import { lerRegra, regraNaUnidade, type RegraQuantidade } from '@/domain/quantidade';
 
 export interface ProdutoCatalogo {
@@ -28,6 +30,10 @@ export interface ProdutoCatalogo {
   semEstoque: boolean;
   /** false = o cliente nao tem area de vendas para este tipo de produto */
   disponivel: boolean;
+  /** prazo minimo de producao em dias (1 ou 2): a entrega do pedido so vale a partir de hoje + este prazo */
+  prazoDias: number;
+  /** ID e texto de linha/grupo/categoria + marca: as regras de incentivo por classificacao comparam os IDs */
+  classificacao: Classificacao;
 }
 
 interface ProdutoRow {
@@ -129,6 +135,16 @@ async function enriquecer(db: SQLiteDatabase, areas: AreaCliente[], produtos: Pr
       preco,
       semEstoque,
       disponivel: area !== null,
+      prazoDias: prazoProducao(dados.estoque?.prazoentregadias),
+      classificacao: {
+        linha_id: dados.classificacao?.linha_id ?? null,
+        grupo_id: dados.classificacao?.grupo_id ?? null,
+        categoria_id: dados.classificacao?.categoria_id ?? null,
+        marca: dados.classificacao?.marca ?? null,
+        linha: dados.classificacao?.linha ?? null,
+        grupo: dados.classificacao?.grupo ?? null,
+        categoria: dados.classificacao?.categoria ?? null,
+      },
     };
   });
 }

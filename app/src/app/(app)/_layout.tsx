@@ -26,8 +26,15 @@ export default function AppLayout() {
           >
             <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
             <Stack.Screen name="cliente/[cod]" options={{ title: 'Cliente' }} />
+            <Stack.Screen name="visita/[cod]" options={{ title: 'Visita' }} />
+            <Stack.Screen name="carteira-parada" options={{ title: 'Carteira parada' }} />
+            <Stack.Screen name="lista-pedidos" options={{ title: 'Pedidos' }} />
+            <Stack.Screen name="lista-titulos" options={{ title: 'Títulos' }} />
+            <Stack.Screen name="cliente-pedidos" options={{ title: 'Pedidos' }} />
+            <Stack.Screen name="cliente-produtos" options={{ title: 'Produtos' }} />
             <Stack.Screen name="pedido/[id]" options={{ title: 'Pedido' }} />
             <Stack.Screen name="pedido/produtos" options={{ title: 'Adicionar produtos' }} />
+            <Stack.Screen name="pedido/produto-info" options={{ title: 'Informações do produto' }} />
             <Stack.Screen name="pedido-sap/[ordem]" options={{ title: 'Pedido' }} />
             <Stack.Screen name="titulo" options={{ title: 'Título' }} />
           </Stack>

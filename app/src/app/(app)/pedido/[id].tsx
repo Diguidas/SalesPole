@@ -5,9 +5,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { ProdutoCatalogo } from '@/db/catalogo';
 import { infoProdutos, rotulo } from '@/db/catalogo';
+import { feriadosDoCliente } from '@/db/feriados';
 import { useDados, useTickAoFocar } from '@/db/hooks';
+import { carregarIncentivos, classificacaoPorProduto, descontoMaxPorProduto } from '@/db/incentivos';
 import {
-  confirmarPedido, descartarPedido, duplicarPedidoApp, lerPedidoApp, salvarCampos, salvarItens,
+  confirmarPedido, descartarPedido, duplicarPedidoApp, lerPedidoApp, salvarCampos, salvarItens, salvarTipo,
 } from '@/db/pedidos';
 import { reenviarNoServidor } from '@/db/push';
 import { obterCliente } from '@/db/queries';
@@ -15,11 +17,13 @@ import {
   aplicarDesconto, definirDesconto, definirQuantidade, estimarTotal, precoParaEnvio, precoUnitarioFinal, removerItem, validarDesconto,
   type ItemPedido,
 } from '@/domain/pedido';
-import { proximaEntrega } from '@/domain/entrega';
+import { HORA_CORTE, previsaoEntrega } from '@/domain/entrega';
+import { ajustarDescontos, incentivoAplicavel, maxManual } from '@/domain/incentivo';
 import { lerQuantidade, validarQuantidade } from '@/domain/quantidade';
-import { dataComDia, hojeISO, moeda, numero } from '@/lib/format';
+import { dataBR, dataComDia, hojeISO, moeda, numero, textoFormas, textoPrazo } from '@/lib/format';
 import { useSync } from '@/lib/sync-context';
-import { Botao, Card, Carregando, Linha, Secao, Selo, Vazio } from '@/ui/components';
+import { Botao, Card, Carregando, Chip, Linha, Secao, Segmentado, Selo, Vazio } from '@/ui/components';
+import { FotoProduto } from '@/ui/FotoProduto';
 import { ModalQuantidade } from '@/ui/ModalQuantidade';
 import { seloDoPedido } from '@/ui/status';
 import { cor, espaco, raio } from '@/ui/theme';
@@ -43,8 +47,18 @@ export default function PedidoTela() {
     [cliente?.cod_cliente, codigos.join(','), dep],
   );
 
+  const { dados: incData } = useDados(
+    async (d) => (cliente ? carregarIncentivos(d, cliente.cod_cliente, cliente.areas) : null),
+    [cliente?.cod_cliente],
+  );
+  const { dados: tiposBon } = useDados((d) => d.getAllAsync<{ codigo: string; descricao: string | null }>('SELECT codigo, descricao FROM bonificacao_tipos ORDER BY codigo'), []);
+  const { dados: centros } = useDados((d) => d.getAllAsync<{ codigo: string; descricao: string | null }>('SELECT codigo, descricao FROM centros_custo ORDER BY codigo'), []);
+
+  const { dados: feriados } = useDados((d) => feriadosDoCliente(d, cliente?.endereco), [cliente?.cod_cliente]);
+
   const [oc, setOc] = useState('');
   const [obs, setObs] = useState('');
+  const [just, setJust] = useState('');
   const [editando, setEditando] = useState<ItemPedido | null>(null);
   const [ocupado, setOcupado] = useState(false);
 
@@ -52,6 +66,7 @@ export default function PedidoTela() {
     if (pedido) {
       setOc(pedido.ordem_compra_cliente ?? '');
       setObs(pedido.observacao ?? '');
+      setJust(pedido.justificativa ?? '');
     }
     // so ao abrir o pedido: depois o que o vendedor digita manda
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -65,6 +80,11 @@ export default function PedidoTela() {
     const p: string[] = [];
     if (!itens.length) p.push('Adicione ao menos um produto.');
     if (cliente?.bloqueado) p.push('Cliente bloqueado: não é possível enviar pedido.');
+    if (pedido?.tipo === 'bonificacao') {
+      if (!pedido.tipo_bonificacao) p.push('Bonificação: escolha o tipo de bonificação.');
+      if (!pedido.centro_custo) p.push('Bonificação: escolha o centro de custo.');
+      if (just.trim().length < 5) p.push('Bonificação: informe a justificativa (para quem vai aprovar).');
+    }
     if (!infoPronta) return p;
     for (const i of itens) {
       const prod = info?.[i.produto];
@@ -80,11 +100,12 @@ export default function PedidoTela() {
       const q = lerQuantidade(i.quantidade);
       const msg = q === null ? 'quantidade inválida.' : validarQuantidade(q, prod.regra);
       if (msg) p.push(`${nome}: ${msg}`);
-      const msgDesc = validarDesconto(i.desconto ?? 0, prod.preco?.descontoMax);
+      // teto do item: o da lista, ou o maior liberado por incentivo por quantidade
+      const msgDesc = validarDesconto(i.desconto ?? 0, Math.max(prod.preco?.descontoMax ?? 0, i.descontoLiberado ?? 0));
       if (msgDesc) p.push(`${nome}: ${msgDesc}`);
     }
     return p;
-  }, [itens, info, infoPronta, cliente]);
+  }, [itens, info, infoPronta, cliente, pedido, just]);
 
   const total = useMemo(() => {
     const precos = Object.fromEntries(
@@ -92,6 +113,12 @@ export default function PedidoTela() {
     );
     return estimarTotal(itens, precos);
   }, [itens, info]);
+
+  // bonificacao nao tem pedido minimo
+  const bonificacao = pedido?.tipo === 'bonificacao';
+  const minimo = bonificacao ? null : (cliente?.pedido_minimo ?? null);
+  const abaixoDoMinimo = minimo !== null && minimo > 0 && itens.length > 0 && total.total < minimo;
+  const faltaMinimo = abaixoDoMinimo && minimo !== null ? minimo - total.total : 0;
 
   if (carregando) return <Carregando />;
   if (!pedido) {
@@ -102,13 +129,39 @@ export default function PedidoTela() {
     );
   }
 
-  const entrega = pedido.dt_entrega ?? proximaEntrega(cliente?.dias_entrega ?? []);
+  // prazo minimo de producao do pedido = o maior prazo entre os itens (1 ou 2 dias)
+  const prazoDias = Math.max(1, ...itens.map((i) => info?.[i.produto]?.prazoDias ?? 1));
+  // previsao: corte das 17h + prazo de producao + feriados. Pedido ja confirmado usa a hora em que foi feito;
+  // depois de enviado, a data real vem do SAP (pedido.dt_entrega)
+  const quando = rascunho ? new Date() : new Date(pedido.criado_em);
+  const prev = pedido.dt_entrega
+    ? null
+    : previsaoEntrega(cliente?.dias_entrega ?? [], quando, prazoDias, feriados?.datas ?? new Set<string>());
+  const entrega = pedido.dt_entrega ?? prev?.data ?? null;
+  const itemMaisLento = prazoDias > 1 ? itens.find((i) => (info?.[i.produto]?.prazoDias ?? 1) === prazoDias) : undefined;
   const selo = seloDoPedido('app', pedido.status);
   const nomeCliente = cliente?.nome_fantasia || cliente?.razao_social || pedido.cod_cliente;
   const recarregar = () => setRecarga((r) => r + 1);
 
+  /** Recalcula o desconto por incentivo para as quantidades atuais (antes de gravar e de enviar). */
+  function ajustar(lista: ItemPedido[]): ItemPedido[] {
+    return incData && info ? ajustarDescontos(lista, descontoMaxPorProduto(info), incData.rows, incData.ctx, classificacaoPorProduto(info)) : lista;
+  }
+
   async function gravar(novos: ItemPedido[]) {
-    await salvarItens(db, id, novos);
+    await salvarItens(db, id, ajustar(novos));
+    recarregar();
+  }
+
+  /** Venda/bonificacao e os campos da bonificacao (gravados na hora). */
+  async function mudarTipo(t: { tipo?: 'venda' | 'bonificacao'; tipo_bonificacao?: string | null; centro_custo?: string | null; justificativa?: string | null }) {
+    if (!pedido) return;
+    await salvarTipo(db, id, {
+      tipo: t.tipo ?? pedido.tipo,
+      tipo_bonificacao: t.tipo_bonificacao !== undefined ? t.tipo_bonificacao : pedido.tipo_bonificacao,
+      centro_custo: t.centro_custo !== undefined ? t.centro_custo : pedido.centro_custo,
+      justificativa: t.justificativa !== undefined ? t.justificativa : just,
+    });
     recarregar();
   }
 
@@ -126,7 +179,10 @@ export default function PedidoTela() {
   function confirmarEnvio() {
     Alert.alert(
       'Enviar pedido?',
-      `${itens.length} ${itens.length === 1 ? 'item' : 'itens'} para ${nomeCliente}.\nEntrega prevista: ${dataComDia(entrega)}.`,
+      (bonificacao ? 'BONIFICAÇÃO\n' : '') +
+        `${itens.length} ${itens.length === 1 ? 'item' : 'itens'} para ${nomeCliente}.\nEntrega prevista: ${dataComDia(entrega)}.` +
+        (bonificacao ? '\n\nEla fica aguardando aprovação e só vai ao SAP depois de aprovada.' : '') +
+        (abaixoDoMinimo && minimo !== null ? `\n\nAtenção: abaixo do pedido mínimo do cliente (${moeda(minimo)}).` : ''),
       [
         { text: 'Revisar', style: 'cancel' },
         { text: 'Enviar', onPress: enviar },
@@ -138,8 +194,17 @@ export default function PedidoTela() {
     setOcupado(true);
     try {
       await salvarRascunhoCampos();
+      await salvarTipo(db, id, {
+        tipo: pedido?.tipo ?? 'venda', tipo_bonificacao: pedido?.tipo_bonificacao ?? null,
+        centro_custo: pedido?.centro_custo ?? null, justificativa: just,
+      });
       // o preco por caixa (ZPR2) e fixado AGORA, com a tabela que o aparelho tem neste momento
-      const comPreco = itens.map((i) => ({ ...i, preco: precoParaEnvio(info?.[i.produto]?.preco ?? undefined, i.unidade, i.desconto) }));
+      // (descontos recalculados para as quantidades finais: incentivo por quantidade + parte do vendedor)
+      const comPreco = ajustar(itens).map((i) => {
+        const pr = info?.[i.produto]?.preco ?? undefined;
+        const prRef = pr ? { ...pr, descontoMax: Math.max(pr.descontoMax ?? 0, i.descontoLiberado ?? 0) } : undefined;
+        return { ...i, preco: precoParaEnvio(prRef, i.unidade, i.desconto) };
+      });
       await salvarItens(db, id, comPreco);
       await confirmarPedido(db, id);
       recarregar();
@@ -201,13 +266,92 @@ export default function PedidoTela() {
         <View style={estilos.selos}>
           {selo ? <Selo texto={selo.texto} tom={selo.tom} /> : null}
           {cliente?.bloqueado ? <Selo texto="Cliente bloqueado" tom="erro" /> : null}
-          {cliente?.limite_disponivel !== null && cliente?.limite_disponivel !== undefined ? <Selo texto={`Limite ${moeda(cliente.limite_disponivel)}`} /> : null}
+          {cliente?.pagamento_antecipado ? <Selo texto="Pagamento antecipado" tom="aviso" /> : null}
+          {!cliente?.pagamento_antecipado && cliente?.limite_disponivel !== null && cliente?.limite_disponivel !== undefined ? <Selo texto={`Limite ${moeda(cliente.limite_disponivel)}`} /> : null}
         </View>
         <View style={{ marginTop: espaco.sm }}>
           <Linha rotulo={pedido.dt_entrega ? 'Entrega' : 'Entrega prevista'} valor={dataComDia(entrega)} />
+          <Linha rotulo="Prazo de pagamento" valor={cliente ? textoPrazo(cliente.areas) : null} />
+          <Linha rotulo="Forma de pagamento" valor={cliente ? textoFormas(cliente.formas_pagamento) : null} />
+          {minimo ? <Linha rotulo="Pedido mínimo" valor={moeda(minimo)} /> : null}
           {pedido.codigo ? <Linha rotulo="Código do pedido" valor={pedido.codigo} /> : null}
         </View>
+        {rascunho && prev?.aposCorte ? (
+          <Text style={estilos.prazoAviso}>
+            Pedido feito depois das {HORA_CORTE}h conta como pedido de amanhã: a entrega considera a partir do dia seguinte.
+          </Text>
+        ) : null}
+        {rascunho && prev?.feriadosPulados.length ? (
+          <Text style={estilos.prazoAviso}>
+            {prev.feriadosPulados.length > 1 ? 'Feriados sem entrega' : 'Feriado sem entrega'}:{' '}
+            {prev.feriadosPulados
+              .slice(0, 3)
+              .map((d) => `${dataBR(d)}${feriados?.descricao.get(d) ? ` (${feriados.descricao.get(d)})` : ''}`)
+              .join(', ')}
+            . A entrega foi ajustada.
+          </Text>
+        ) : null}
+        {rascunho && itemMaisLento ? (
+          <Text style={estilos.prazoAviso}>
+            Prazo de produção de {prazoDias} dias ({info?.[itemMaisLento.produto]?.descricao ?? itemMaisLento.produto}): a entrega é no primeiro dia de entrega do cliente a partir de {prazoDias} dias após a compra.
+          </Text>
+        ) : null}
       </Card>
+
+      {rascunho ? (
+        <Card style={{ marginTop: espaco.md, gap: espaco.sm }}>
+          <Text style={estilos.rotulo}>Tipo do pedido</Text>
+          <Segmentado
+            opcoes={[{ valor: 'venda', texto: 'Venda' }, { valor: 'bonificacao', texto: 'Bonificação' }]}
+            valor={pedido.tipo}
+            onChange={(v) => mudarTipo({ tipo: v })}
+          />
+          {bonificacao ? (
+            <>
+              <Text style={[estilos.rotulo, { marginTop: espaco.sm }]}>Tipo de bonificação</Text>
+              <View style={estilos.chips}>
+                {(tiposBon ?? []).map((t) => (
+                  <Chip key={t.codigo} texto={`${t.codigo} · ${t.descricao ?? ''}`} ativo={pedido.tipo_bonificacao === t.codigo} onPress={() => mudarTipo({ tipo_bonificacao: t.codigo })} />
+                ))}
+              </View>
+              {tiposBon && !tiposBon.length ? <Text style={estilos.dica}>Nenhum tipo cadastrado. Peça para cadastrar no painel e sincronize.</Text> : null}
+              <Text style={[estilos.rotulo, { marginTop: espaco.sm }]}>Centro de custo</Text>
+              <View style={estilos.chips}>
+                {(centros ?? []).map((c) => (
+                  <Chip key={c.codigo} texto={`${c.codigo} · ${c.descricao ?? ''}`} ativo={pedido.centro_custo === c.codigo} onPress={() => mudarTipo({ centro_custo: c.codigo })} />
+                ))}
+              </View>
+              {centros && !centros.length ? <Text style={estilos.dica}>Nenhum centro de custo cadastrado. Peça para cadastrar no painel e sincronize.</Text> : null}
+              <Text style={[estilos.rotulo, { marginTop: espaco.sm }]}>Justificativa (só para quem aprova)</Text>
+              <TextInput
+                style={[estilos.campo, { minHeight: 70, textAlignVertical: 'top' }]}
+                value={just}
+                onChangeText={setJust}
+                onBlur={() => mudarTipo({ justificativa: just })}
+                multiline
+                maxLength={500}
+              />
+              <Text style={estilos.dica}>A bonificação fica aguardando aprovação no painel e só vai ao SAP depois de aprovada.</Text>
+            </>
+          ) : null}
+        </Card>
+      ) : pedido.tipo === 'bonificacao' ? (
+        <Card style={{ marginTop: espaco.md, ...(pedido.status === 'rejeitado' ? estilos.cardErro : estilos.cardAviso) }}>
+          <Text style={estilos.subtitulo}>Bonificação</Text>
+          <Linha rotulo="Tipo" valor={(tiposBon ?? []).find((t) => t.codigo === pedido.tipo_bonificacao)?.descricao ?? pedido.tipo_bonificacao} />
+          <Linha rotulo="Centro de custo" valor={(centros ?? []).find((c) => c.codigo === pedido.centro_custo)?.descricao ?? pedido.centro_custo} />
+          {pedido.justificativa ? <Linha rotulo="Justificativa" valor={pedido.justificativa} /> : null}
+          <Text style={pedido.status === 'rejeitado' ? estilos.erroTexto : estilos.avisoTexto}>
+            {pedido.status === 'aguardando_aprovacao'
+              ? 'Aguardando aprovação. Só vai ao SAP depois de aprovada.'
+              : pedido.status === 'rejeitado'
+                ? `Rejeitada${pedido.motivo_rejeicao ? `: ${pedido.motivo_rejeicao}` : '.'} Duplique o pedido para corrigir e enviar de novo.`
+                : pedido.status === 'aprovado'
+                  ? 'Aprovada. Enviando ao SAP.'
+                  : 'Bonificação aprovada.'}
+          </Text>
+        </Card>
+      ) : null}
 
       {!rascunho ? (
         <View style={{ marginTop: espaco.md, gap: espaco.sm }}>
@@ -263,6 +407,13 @@ export default function PedidoTela() {
       {itens.length ? (
         <Card style={{ marginTop: espaco.lg }}>
           <Linha rotulo="Total estimado" valor={moeda(total.total)} />
+          {minimo ? (
+            <Text style={abaixoDoMinimo ? estilos.minimoAviso : estilos.minimoOk}>
+              {abaixoDoMinimo
+                ? `Abaixo do pedido mínimo de ${moeda(minimo)}: faltam ${moeda(faltaMinimo)}${total.semEstimativa ? ' (estimativa incompleta)' : ''}.`
+                : `Pedido mínimo de ${moeda(minimo)} atingido.`}
+            </Text>
+          ) : null}
           {total.semEstimativa ? (
             <Text style={estilos.dica}>
               {total.semEstimativa} {total.semEstimativa === 1 ? 'item fica' : 'itens ficam'} fora da estimativa (sem preço de tabela ou em outra unidade): o SAP aplica a lista. O valor líquido final (sem impostos) é calculado pelo SAP.
@@ -322,7 +473,20 @@ export default function PedidoTela() {
         regra={editando ? (info?.[editando.produto]?.regra ?? { minimo: null, multiplo: null }) : { minimo: null, multiplo: null }}
         confirmarTexto="Salvar"
         descontoMax={editando ? (info?.[editando.produto]?.preco?.descontoMax ?? 0) : 0}
-        descontoInicial={editando?.desconto}
+        descontoInicial={editando ? (editando.descontoManual ?? editando.desconto) : undefined}
+        maxPorQuantidade={
+          editando
+            ? (q) => maxManual(info?.[editando.produto]?.preco?.descontoMax ?? 0, incData ? incentivoAplicavel(incData.rows, editando.produto, q, incData.ctx, info?.[editando.produto]?.classificacao) : null)
+            : undefined
+        }
+        dicaDesconto={
+          editando && incData
+            ? (q) => {
+                const inc = incentivoAplicavel(incData.rows, editando.produto, q, incData.ctx, info?.[editando.produto]?.classificacao);
+                return inc ? `Incentivo por quantidade: ${inc.desconto_pct}% automático + até ${inc.desconto_extra_max_pct}% extra seu.` : null;
+              }
+            : undefined
+        }
         onCancelar={() => setEditando(null)}
         onConfirmar={async (q, d) => {
           if (editando) {
@@ -341,12 +505,14 @@ function ItemLinha({
   const q = lerQuantidade(item.quantidade) ?? 0;
   const unid = prod ? rotulo(prod, item.unidade) : item.unidade; // texto que o vendedor le (CX), nao o codigo (KI)
   const preco = prod?.preco ? `${moeda(prod.preco.valor)}/${rotulo(prod, prod.preco.unidade)}` : 'sem preço de tabela';
-  const temDesc = !!item.desconto && item.desconto > 0 && !!prod?.preco && validarDesconto(item.desconto, prod.preco.descontoMax) === null;
+  const teto = Math.max(prod?.preco?.descontoMax ?? 0, item.descontoLiberado ?? 0);
+  const temDesc = !!item.desconto && item.desconto > 0 && !!prod?.preco && validarDesconto(item.desconto, teto) === null;
   const precoFinal = prod?.preco && temDesc ? aplicarDesconto(prod.preco.valor, item.desconto) : null;
   const subtotal = prod?.preco && prod.preco.unidade === item.unidade ? moeda(precoUnitarioFinal(prod.preco, item) * q) : null;
 
   return (
     <Card style={estilos.item}>
+      <FotoProduto cod={item.produto} tamanho={48} />
       <View style={{ flex: 1, gap: 2 }}>
         <Text style={estilos.itemNome} numberOfLines={2}>{prod?.descricao ?? item.produto}</Text>
         <Text style={estilos.itemSuave}>{preco}{temDesc ? ` −${item.desconto}% = ${moeda(precoFinal)}/${unid}` : ''}{subtotal ? ` · ${subtotal}` : ''}</Text>
@@ -388,6 +554,10 @@ const estilos = StyleSheet.create({
   cardAviso: { backgroundColor: cor.avisoFundo, borderColor: cor.amarelo, gap: 4 },
   avisoTexto: { fontSize: 13, color: cor.aviso },
   dica: { fontSize: 12, color: cor.textoSuave, marginTop: 4 },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  prazoAviso: { color: cor.aviso, fontSize: 12, marginTop: espaco.sm },
+  minimoAviso: { color: cor.aviso, fontWeight: '700', fontSize: 13, marginTop: 4 },
+  minimoOk: { color: cor.ok, fontWeight: '600', fontSize: 13, marginTop: 4 },
   item: { flexDirection: 'row', alignItems: 'center', gap: espaco.md, marginBottom: espaco.sm },
   itemNome: { fontSize: 15, fontWeight: '700', color: cor.texto },
   itemSuave: { fontSize: 12, color: cor.textoSuave },

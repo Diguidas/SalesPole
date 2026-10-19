@@ -77,3 +77,31 @@ export function numero(n: number | null | undefined): string {
   if (n === null || n === undefined || Number.isNaN(n)) return '—';
   return n.toLocaleString('pt-BR', { maximumFractionDigits: 3 });
 }
+
+/** Prazo de pagamento do cliente (condicao do SAP). Areas com prazos diferentes aparecem separadas por " / ". */
+export function textoPrazo(areas: Array<{ cond_pagamento?: { codigo: string; descricao?: string } | null }>): string | null {
+  const vistos = new Set<string>();
+  for (const a of areas) {
+    const c = a.cond_pagamento;
+    const t = (c?.descricao || c?.codigo || '').trim();
+    if (t) vistos.add(t);
+  }
+  return vistos.size ? [...vistos].join(' / ') : null;
+}
+
+/** Formas de pagamento aceitas pelo cliente, ex.: "Boleto, Pix". */
+export function textoFormas(formas: Array<{ codigo: string; descricao?: string }>): string | null {
+  const t = formas.map((f) => (f.descricao || f.codigo || '').trim()).filter(Boolean);
+  return t.length ? t.join(', ') : null;
+}
+
+/** Link do mapa (Google Maps abre no app de mapas do celular). */
+export function linkMapa(lat: number | null, lng: number | null): string | null {
+  return lat === null || lng === null ? null : `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+}
+
+/** Data (AAAA-MM-DD) de `dias` dias antes de `hoje` (AAAA-MM-DD), no calendario local. */
+export function diasAtras(hoje: string, dias: number): string {
+  const d = new Date(Number(hoje.slice(0, 4)), Number(hoje.slice(5, 7)) - 1, Number(hoje.slice(8, 10)) - dias);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}

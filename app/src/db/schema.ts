@@ -134,6 +134,15 @@ export const TABELAS_DE_DADOS = [
   'titulos',
   'remessas',
   'pedidos_app',
+  'bonificacao_tipos',
+  'centros_custo',
+  'destaques',
+  'incentivos',
+  'feriados',
+  'visita_fotos',
+  'visitas',
+  'historico_mes',
+  'historico_produto',
 ] as const;
 
 export async function migrar(db: SQLiteDatabase): Promise<void> {
@@ -160,6 +169,110 @@ export async function migrar(db: SQLiteDatabase): Promise<void> {
     await db.withTransactionAsync(async () => {
       await db.execAsync("DELETE FROM meta WHERE chave = 'cursor'");
       await db.execAsync('PRAGMA user_version = 3');
+    });
+  }
+  if (v < 4) {
+    // localizacao, pedido minimo e formas de pagamento do cliente; refaz o pull do zero para preencher
+    await db.withTransactionAsync(async () => {
+      await db.execAsync('ALTER TABLE clientes ADD COLUMN latitude REAL');
+      await db.execAsync('ALTER TABLE clientes ADD COLUMN longitude REAL');
+      await db.execAsync('ALTER TABLE clientes ADD COLUMN pedido_minimo REAL');
+      await db.execAsync('ALTER TABLE clientes ADD COLUMN formas_pagamento TEXT');
+      await db.execAsync("DELETE FROM meta WHERE chave = 'cursor'");
+      await db.execAsync('PRAGMA user_version = 4');
+    });
+  }
+  if (v < 5) {
+    // bonificacao (tipo, centro de custo, justificativa, aprovacao) e cadastros do painel web
+    await db.withTransactionAsync(async () => {
+      await db.execAsync("ALTER TABLE pedidos_app ADD COLUMN tipo TEXT NOT NULL DEFAULT 'venda'");
+      await db.execAsync('ALTER TABLE pedidos_app ADD COLUMN tipo_bonificacao TEXT');
+      await db.execAsync('ALTER TABLE pedidos_app ADD COLUMN centro_custo TEXT');
+      await db.execAsync('ALTER TABLE pedidos_app ADD COLUMN justificativa TEXT');
+      await db.execAsync('ALTER TABLE pedidos_app ADD COLUMN motivo_rejeicao TEXT');
+      await db.execAsync(`
+        CREATE TABLE IF NOT EXISTS bonificacao_tipos (codigo TEXT PRIMARY KEY, descricao TEXT);
+        CREATE TABLE IF NOT EXISTS centros_custo (codigo TEXT PRIMARY KEY, descricao TEXT);
+        CREATE TABLE IF NOT EXISTS destaques (
+          cod_produto TEXT PRIMARY KEY, destaque INTEGER NOT NULL DEFAULT 0, lancamento INTEGER NOT NULL DEFAULT 0,
+          ordem INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS incentivos (
+          id TEXT PRIMARY KEY, cod_produto TEXT, escopo TEXT NOT NULL, escopo_valor TEXT,
+          qtd_minima REAL NOT NULL, desconto_pct REAL NOT NULL, desconto_extra_max_pct REAL NOT NULL DEFAULT 0
+        );
+      `);
+      await db.execAsync('PRAGMA user_version = 5');
+    });
+  }
+  if (v < 6) {
+    // desconto por incentivo tambem por linha, grupo, categoria e marca do produto
+    await db.withTransactionAsync(async () => {
+      for (const c of ['linha', 'grupo', 'categoria', 'marca']) {
+        await db.execAsync(`ALTER TABLE incentivos ADD COLUMN ${c} TEXT`);
+      }
+      await db.execAsync('PRAGMA user_version = 6');
+    });
+  }
+  if (v < 7) {
+    // incentivo por ID de linha/grupo/categoria (os textos da v6 ficam sem uso) e feriados (calendario de entrega)
+    await db.withTransactionAsync(async () => {
+      for (const c of ['linha_id', 'grupo_id', 'categoria_id']) {
+        await db.execAsync(`ALTER TABLE incentivos ADD COLUMN ${c} TEXT`);
+      }
+      await db.execAsync(`
+        CREATE TABLE IF NOT EXISTS feriados (data TEXT NOT NULL, descricao TEXT, uf TEXT, cidade TEXT);
+        CREATE INDEX IF NOT EXISTS ix_feriados_data ON feriados (data);
+      `);
+      await db.execAsync('PRAGMA user_version = 7');
+    });
+  }
+  if (v < 8) {
+    // cliente com pagamento antecipado (forma 'V'): sem credito
+    await db.withTransactionAsync(async () => {
+      await db.execAsync('ALTER TABLE clientes ADD COLUMN pagamento_antecipado INTEGER NOT NULL DEFAULT 0');
+      await db.execAsync('PRAGMA user_version = 8');
+    });
+  }
+  if (v < 9) {
+    // roteiro de visita: check-in com GPS + foto de fachada + resultado (offline; sobe depois)
+    await db.withTransactionAsync(async () => {
+      await db.execAsync(`
+        CREATE TABLE IF NOT EXISTS visitas (
+          id TEXT PRIMARY KEY, cod_cliente TEXT NOT NULL, data_visita TEXT NOT NULL,
+          status TEXT NOT NULL, checkin_em TEXT NOT NULL,
+          checkin_lat REAL, checkin_lng REAL, checkin_precisao_m REAL, gps_falso INTEGER NOT NULL DEFAULT 0,
+          distancia_m INTEGER, fora_do_raio INTEGER NOT NULL DEFAULT 0, sem_referencia INTEGER NOT NULL DEFAULT 0,
+          checkout_em TEXT, resultado TEXT, motivo_nao_venda TEXT, observacao TEXT, pedido_id TEXT,
+          validacao TEXT, validacao_obs TEXT,
+          sincronizada INTEGER NOT NULL DEFAULT 0,   -- 0 = precisa enviar | 1 = enviada | 2 = recusada pelo servidor
+          erro_envio TEXT
+        );
+        CREATE INDEX IF NOT EXISTS ix_visitas_dia ON visitas (data_visita, cod_cliente);
+        CREATE TABLE IF NOT EXISTS visita_fotos (
+          id TEXT PRIMARY KEY, visita_id TEXT NOT NULL, tipo TEXT NOT NULL, uri TEXT NOT NULL, tirada_em TEXT NOT NULL,
+          lat REAL, lng REAL, tamanho_bytes INTEGER, enviada INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS ix_visita_fotos_visita ON visita_fotos (visita_id);
+      `);
+      await db.execAsync('PRAGMA user_version = 9');
+    });
+  }
+  if (v < 10) {
+    // historico de 12 meses: so totais prontos (o servidor guarda os pedidos antigos; o app nao baixa)
+    await db.withTransactionAsync(async () => {
+      await db.execAsync(`
+        CREATE TABLE IF NOT EXISTS historico_mes (
+          cod_cliente TEXT NOT NULL, mes TEXT NOT NULL, valor REAL NOT NULL DEFAULT 0, pedidos INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (cod_cliente, mes)
+        );
+        CREATE TABLE IF NOT EXISTS historico_produto (
+          cod_cliente TEXT NOT NULL, cod_produto TEXT NOT NULL, denominacao TEXT, ultima_compra TEXT,
+          pedidos INTEGER NOT NULL DEFAULT 0, quantidade REAL NOT NULL DEFAULT 0, unidade TEXT, meses_com_compra INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (cod_cliente, cod_produto)
+        );
+      `);
+      await db.execAsync('PRAGMA user_version = 10');
     });
   }
 }
