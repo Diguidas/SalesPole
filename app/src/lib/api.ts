@@ -10,14 +10,25 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Modo equipe: vendedor que o supervisor/gerente escolheu. Vai no cabecalho X-Vendedor de toda chamada (o servidor
+ * confere se ele e da equipe). null = usuario comum, o servidor usa o vendedor do proprio login.
+ */
+let vendedorAtivo: string | null = null;
+export function definirVendedorAtivo(cod: string | null): void {
+  vendedorAtivo = cod;
+}
+
 interface Opcoes {
   method?: 'GET' | 'POST';
   body?: unknown;
   timeoutMs?: number;
+  /** Rotas do modo equipe (/equipe/*): nao levam o X-Vendedor, valem para o proprio login. */
+  semVendedor?: boolean;
 }
 
 /** Chama a API NestJS com o token do login (renovado automaticamente pelo supabase-js). */
-export async function api<T>(caminho: string, { method = 'GET', body, timeoutMs = 90_000 }: Opcoes = {}): Promise<T> {
+export async function api<T>(caminho: string, { method = 'GET', body, timeoutMs = 90_000, semVendedor = false }: Opcoes = {}): Promise<T> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
   if (!token) throw new ApiError(401, 'Sessão expirada. Entre novamente.');
@@ -31,6 +42,7 @@ export async function api<T>(caminho: string, { method = 'GET', body, timeoutMs 
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: 'application/json',
+        ...(vendedorAtivo && !semVendedor ? { 'X-Vendedor': vendedorAtivo } : {}),
         ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,

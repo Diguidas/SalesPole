@@ -2,9 +2,12 @@ import { Stack } from 'expo-router';
 import { SQLiteProvider } from 'expo-sqlite';
 import { Suspense } from 'react';
 import { migrar } from '@/db/schema';
+import { useEquipe } from '@/lib/equipe';
 import { SyncProvider } from '@/lib/sync-context';
 import { AvisosPopup } from '@/ui/AvisosPopup';
+import { ChipEquipe } from '@/ui/ChipEquipe';
 import { Carregando } from '@/ui/components';
+import { SeletorVendedor } from '@/ui/SeletorVendedor';
 import { cor } from '@/ui/theme';
 
 /**
@@ -13,13 +16,19 @@ import { cor } from '@/ui/theme';
  * filhos depois que o banco abre (aqui isso e coberto pelo Suspense).
  */
 export default function AppLayout() {
+  const { carregando, vendedor, semVendedor } = useEquipe();
+  // Modo equipe: cada vendedor visto tem o proprio banco local (nada se mistura com o de outro vendedor)
+  const banco = vendedor ? `salespole_eq_${vendedor.cod}.db` : 'salespole.db';
+  if (carregando) return <Carregando />;
   return (
     <Suspense fallback={<Carregando />}>
-      <SQLiteProvider databaseName="salespole.db" onInit={migrar} useSuspense>
-        <SyncProvider>
+      <SQLiteProvider key={banco} databaseName={banco} onInit={migrar} useSuspense>
+        <SyncProvider ativo={!semVendedor}>
           <AvisosPopup />
+          <SeletorVendedor />
           <Stack
             screenOptions={{
+              headerRight: () => <ChipEquipe />,
               headerStyle: { backgroundColor: cor.primaria },
               headerTintColor: cor.textoSobrePrimaria,
               headerTitleStyle: { fontWeight: '700' },
@@ -28,6 +37,9 @@ export default function AppLayout() {
           >
             <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
             <Stack.Screen name="cliente/[cod]" options={{ title: 'Cliente' }} />
+            <Stack.Screen name="cliente-equipe/[cod]" options={{ title: 'Cliente' }} />
+            <Stack.Screen name="pedido-equipe/[ordem]" options={{ title: 'Pedido' }} />
+            <Stack.Screen name="titulo-equipe" options={{ title: 'Título' }} />
             <Stack.Screen name="visita/[cod]" options={{ title: 'Visita' }} />
             <Stack.Screen name="carteira-parada" options={{ title: 'Carteira parada' }} />
             <Stack.Screen name="lista-pedidos" options={{ title: 'Pedidos' }} />

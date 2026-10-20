@@ -148,7 +148,19 @@ export const TABELAS_DE_DADOS = [
   'historico_produto',
 ] as const;
 
-export async function migrar(db: SQLiteDatabase): Promise<void> {
+/** Migracoes em andamento por arquivo de banco: duas chamadas ao mesmo tempo (o React pode repetir o onInit do SQLiteProvider) esperam a mesma. */
+const migrando = new Map<string, Promise<void>>();
+
+export function migrar(db: SQLiteDatabase): Promise<void> {
+  const chave = db.databasePath;
+  const andamento = migrando.get(chave);
+  if (andamento) return andamento;
+  const p = executarMigracoes(db).finally(() => migrando.delete(chave));
+  migrando.set(chave, p);
+  return p;
+}
+
+async function executarMigracoes(db: SQLiteDatabase): Promise<void> {
   await db.execAsync('PRAGMA journal_mode = WAL;');
   const row = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
   const v = row?.user_version ?? 0;

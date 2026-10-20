@@ -26,7 +26,10 @@ const Ctx = createContext<SyncCtx | null>(null);
 
 const SYNC_AUTOMATICO_APOS_MS = 10 * 60_000; // ao abrir/voltar ao app, sincroniza se estiver mais velho que isso
 
-export function SyncProvider({ children }: { children: ReactNode }) {
+/**
+ * `ativo = false` (supervisor/gerente sem vendedor escolhido): nao ha carteira para sincronizar, entao nada sobe nem desce.
+ */
+export function SyncProvider({ children, ativo = true }: { children: ReactNode; ativo?: boolean }) {
   const db = useSQLiteContext();
   const { session } = useSession();
   const userId = session?.user.id ?? null;
@@ -39,7 +42,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   const ultimoSyncRef = useRef<string | null>(null);
 
   const sincronizar = useCallback(async () => {
-    if (emAndamento.current) return;
+    if (!ativo || emAndamento.current) return;
     emAndamento.current = true;
     setSincronizando(true);
     try {
@@ -67,10 +70,10 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       emAndamento.current = false;
       setSincronizando(false);
     }
-  }, [db]);
+  }, [db, ativo]);
 
   const enviarPedidos = useCallback(async (): Promise<string | null> => {
-    if (emAndamento.current) return null; // um sincronismo ja esta enviando
+    if (!ativo || emAndamento.current) return null; // um sincronismo ja esta enviando
     emAndamento.current = true;
     try {
       const rede = await NetInfo.fetch();
@@ -83,11 +86,11 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       emAndamento.current = false;
       setVersao((v) => v + 1);
     }
-  }, [db]);
+  }, [db, ativo]);
 
   // Login: se mudou o usuario neste aparelho, apaga os dados do anterior antes de qualquer coisa.
   useEffect(() => {
-    if (!userId) return;
+    if (!userId || !ativo) return;
     let vivo = true;
     (async () => {
       await prepararUsuario(db, userId);
@@ -101,11 +104,11 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     return () => {
       vivo = false;
     };
-  }, [db, userId, sincronizar]);
+  }, [db, userId, ativo, sincronizar]);
 
   // Voltou ao app ou a rede: sincroniza se os dados estiverem velhos.
   useEffect(() => {
-    if (!userId) return;
+    if (!userId || !ativo) return;
     const velho = () =>
       !ultimoSyncRef.current || Date.now() - Date.parse(ultimoSyncRef.current) > SYNC_AUTOMATICO_APOS_MS;
 
@@ -124,7 +127,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       app.remove();
       rede();
     };
-  }, [userId, sincronizar]);
+  }, [userId, ativo, sincronizar]);
 
   const valor = useMemo(
     () => ({ sincronizando, ultimoSync, erro, versao, sincronizar, enviarPedidos }),

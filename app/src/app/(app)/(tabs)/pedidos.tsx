@@ -4,8 +4,10 @@ import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'r
 import { useDados, useTickAoFocar } from '@/db/hooks';
 import { carteiraParada, contarFila, listarPedidos, vendasPorMes } from '@/db/queries';
 import { dataBR, diasAtras, hojeISO, moeda } from '@/lib/format';
+import { useEquipe } from '@/lib/equipe';
 import { useSync } from '@/lib/sync-context';
 import { BarChart } from '@/ui/BarChart';
+import { EquipeAnalise } from '@/ui/EquipeAnalise';
 import { Card, Secao, Selo, Vazio } from '@/ui/components';
 import { seloDoPedido } from '@/ui/status';
 import { cor, espaco, raio } from '@/ui/theme';
@@ -15,6 +17,11 @@ const valorCurto = (v: number) => (v >= 1000 ? `${(v / 1000).toLocaleString('pt-
 
 /** Aba Analise: vendido nos ultimos 3 meses + atalhos para as listas de pedidos e titulos. */
 export default function Analise() {
+  const { semVendedor } = useEquipe();
+  return semVendedor ? <EquipeAnalise /> : <AnaliseVendedor />;
+}
+
+function AnaliseVendedor() {
   const router = useRouter();
   const tick = useTickAoFocar();
   const { sincronizar, sincronizando } = useSync();

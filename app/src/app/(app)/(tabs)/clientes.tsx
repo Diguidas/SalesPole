@@ -4,11 +4,19 @@ import { useState } from 'react';
 import { FlatList, StyleSheet, TextInput, View } from 'react-native';
 import { useDados } from '@/db/hooks';
 import { listarClientes } from '@/db/queries';
+import { useEquipe } from '@/lib/equipe';
 import { Vazio } from '@/ui/components';
+import { EquipeClientes } from '@/ui/EquipeClientes';
 import { CardCliente } from '@/ui/CardCliente';
 import { cor, espaco, raio } from '@/ui/theme';
 
+/** Supervisor/gerente sem vendedor escolhido ve os clientes da equipe; com vendedor (ou vendedor comum), a carteira local. */
 export default function Clientes() {
+  const { semVendedor } = useEquipe();
+  return semVendedor ? <EquipeClientes /> : <ClientesVendedor />;
+}
+
+function ClientesVendedor() {
   const router = useRouter();
   const [busca, setBusca] = useState('');
   const { dados: clientes } = useDados((db) => listarClientes(db, busca), [busca]);

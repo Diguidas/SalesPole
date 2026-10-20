@@ -33,7 +33,13 @@ export async function tirarFoto(): Promise<FotoCapturada | null> {
   const pasta = new Directory(Paths.document, 'visitas');
   if (!pasta.exists) pasta.create();
   const destino = new File(pasta, `${Crypto.randomUUID()}.jpg`);
-  new File(reduzida.uri).copy(destino);
+  try {
+    await new File(reduzida.uri).copy(destino);
+  } catch {
+    // sem acesso ao arquivo da camera/manipulador: usa a foto reduzida onde ela esta
+    const orig = new File(reduzida.uri);
+    return { uri: orig.uri, tamanhoBytes: orig.exists ? orig.size : null };
+  }
   return { uri: destino.uri, tamanhoBytes: destino.size };
 }
 

@@ -5,14 +5,22 @@ import { useDados, useTickAoFocar } from '@/db/hooks';
 import { clientesDoDia, remessasDoDia, vendasDoMes } from '@/db/queries';
 import { visitasDoDia } from '@/db/visitas';
 import { diaSemanaHoje, haQuanto, hojeISO, moeda, NOME_DIA } from '@/lib/format';
+import { useEquipe } from '@/lib/equipe';
 import { useSync } from '@/lib/sync-context';
+import { EquipeHome } from '@/ui/EquipeHome';
 import { Card, Secao, Vazio } from '@/ui/components';
 import { CardCliente } from '@/ui/CardCliente';
 import { cor, espaco } from '@/ui/theme';
 
 const NOME_MES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
 
+/** Supervisor/gerente sem vendedor escolhido ve o resumo da equipe; com vendedor escolhido (ou vendedor comum) ve o inicio do vendedor. */
 export default function Inicio() {
+  const { semVendedor } = useEquipe();
+  return semVendedor ? <EquipeHome /> : <InicioVendedor />;
+}
+
+function InicioVendedor() {
   const router = useRouter();
   const { sincronizar, sincronizando, ultimoSync, erro } = useSync();
   const dia = diaSemanaHoje();

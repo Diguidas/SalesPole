@@ -99,18 +99,35 @@ export interface PdfGerado {
 /** Gera o PDF do pedido (uma folha por ordem do SAP) e devolve o arquivo. Lanca Error se o pedido nao existir. */
 export async function gerarPdfPedido(db: SQLiteDatabase, id: string): Promise<PdfGerado> {
   // carregados so quando o vendedor pede: ficam fora do bundle inicial
-  const [{ printToFileAsync }, { File, Paths }] = await Promise.all([import('expo-print'), import('expo-file-system')]);
+  const { printToFileAsync } = await import('expo-print');
   const entrada = await carregarEntradaPdf(db, id);
   if (!entrada) throw new Error('Pedido não encontrado neste aparelho.');
   const doc = montarDocPedido(entrada);
-  const { uri } = await printToFileAsync({ html: htmlPedido(doc), width: 595, height: 842, margins: { left: 23, top: 23, right: 23, bottom: 23 } });
-
-  // nome legivel (pedido_0421173.pdf) para quando o vendedor mandar ao cliente
+  const { base64, uri: uriImpressao } = await printToFileAsync({
+    html: htmlPedido(doc),
+    width: 595,
+    height: 842,
+    margins: { left: 23, top: 23, right: 23, bottom: 23 },
+    base64: true,
+  });
   const nome = nomeArquivoPedido(doc);
-  const destino = new File(Paths.cache, nome);
-  if (destino.exists) destino.delete();
-  new File(uri).copy(destino);
-  return { uri: destino.uri, nome };
+
+  // grava o PDF numa pasta do app que o expo-sharing pode ler, com nome legivel (pedido_0421173.pdf);
+  // se nao der (Expo Go), compartilha o arquivo do expo-print como esta
+  try {
+    if (!base64) throw new Error('sem base64');
+    const { File, Paths } = await import('expo-file-system');
+    const destino = new File(Paths.cache, nome);
+    if (destino.exists) destino.delete();
+    destino.create();
+    const bin = atob(base64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    destino.write(bytes);
+    return { uri: destino.uri, nome };
+  } catch {
+    return { uri: uriImpressao, nome };
+  }
 }
 
 /** Gera o PDF e abre o compartilhamento do aparelho (WhatsApp, e-mail, salvar...). */
