@@ -18,7 +18,7 @@ interface Bonificacao {
   recebido_em: string;
   decidido_por: string | null;
   decidido_em: string | null;
-  itens: Array<{ produto: string; descricao: string | null; unidade: string; quantidade: string }>;
+  itens: Array<{ produto: string; descricao: string | null; unidade: string; unidade_texto?: string; quantidade: string }>;
 }
 
 const FILTROS = [
@@ -105,7 +105,7 @@ export function BonificacoesScreen() {
           {b.motivo_rejeicao && <p style={{ margin: '6px 0 0' }}><strong>Motivo da rejeição:</strong> {b.motivo_rejeicao}</p>}
           <ul className="itens">
             {b.itens.map((i, n) => (
-              <li key={n}>{i.quantidade} {i.unidade} · {i.produto} {i.descricao ? `- ${i.descricao}` : ''}</li>
+              <li key={n}>{i.quantidade} {i.unidade_texto ?? i.unidade} · {i.produto} {i.descricao ? `- ${i.descricao}` : ''}</li>
             ))}
           </ul>
           {status === 'aguardando_aprovacao' && podeDecidir && (

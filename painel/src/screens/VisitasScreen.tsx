@@ -24,6 +24,7 @@ interface Visita {
   resultado: 'vendeu' | 'nao_vendeu' | null;
   motivo_nao_venda: string | null;
   observacao: string | null;
+  respostas: Array<{ pergunta_id: string; pergunta: string; resposta: string }>;
   validacao: 'pendente' | 'validada' | 'recusada';
   validada_por: string | null;
   validada_em: string | null;
@@ -133,6 +134,12 @@ export function VisitasScreen() {
               </div>
             )}
             {v.validacao_obs && <p style={{ margin: '8px 0 0' }}><strong>Observação:</strong> {v.validacao_obs}</p>}
+            {(v.respostas ?? []).length > 0 && (
+              <div style={{ margin: '10px 0 0', padding: '10px 12px', background: '#f8fafc', borderRadius: 8 }}>
+                <div className="suave" style={{ fontWeight: 700, marginBottom: 4 }}>Respostas do vendedor</div>
+                {v.respostas.map((r) => <div key={r.pergunta_id} style={{ fontSize: 13, padding: '2px 0' }}><span className="suave">{r.pergunta}</span> <strong>{r.resposta}</strong></div>)}
+              </div>
+            )}
 
             <div className="fotos">
               {v.fotos.length === 0 && <span className="suave">Sem foto enviada.</span>}

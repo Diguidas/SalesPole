@@ -1,4 +1,4 @@
-export type TipoCampo = 'texto' | 'numero' | 'data' | 'bool' | 'produto' | 'select';
+export type TipoCampo = 'texto' | 'area' | 'numero' | 'data' | 'bool' | 'produto' | 'select';
 
 export interface Campo {
   chave: string;
@@ -42,6 +42,31 @@ const ESCOPOS = [
   { v: 'vendedor', r: 'Vendedor' },
   { v: 'canal', r: 'Canal' },
   { v: 'escritorio', r: 'Escritório de vendas' },
+];
+
+const TIPOS_PERGUNTA = [
+  { v: 'texto', r: 'Texto livre' },
+  { v: 'sim_nao', r: 'Sim ou não' },
+  { v: 'numero', r: 'Número' },
+  { v: 'opcoes', r: 'Escolher uma opção' },
+];
+const NIVEIS_AVISO = [
+  { v: 'info', r: 'Informativo' },
+  { v: 'importante', r: 'Importante' },
+  { v: 'urgente', r: 'Urgente' },
+];
+const ESCOPOS_AVISO = [
+  { v: 'geral', r: 'Todos' },
+  { v: 'vendedor', r: 'Vendedor' },
+  { v: 'escritorio', r: 'Escritório de vendas' },
+  { v: 'canal', r: 'Canal' },
+];
+const ESCOPOS_PERGUNTA = [
+  { v: 'geral', r: 'Todos' },
+  { v: 'vendedor', r: 'Vendedor' },
+  { v: 'escritorio', r: 'Escritório de vendas' },
+  { v: 'canal', r: 'Canal' },
+  { v: 'cliente', r: 'Cliente' },
 ];
 
 export const CADASTROS: Record<string, DefCadastro> = {
@@ -130,6 +155,51 @@ export const CADASTROS: Record<string, DefCadastro> = {
       { chave: 'vigencia_ini', rotulo: 'Vigência', formatar: (_v, l) => (l.vigencia_ini || l.vigencia_fim ? `${dataBR(l.vigencia_ini)} a ${dataBR(l.vigencia_fim)}` : 'sempre') },
     ],
   },
+  avisos: {
+    titulo: 'Avisos para os vendedores',
+    descricao: 'Aviso que aparece num pop-up quando o vendedor abre o app, uma vez por aparelho (ele toca em "Entendi"). Escolha para quem vale: todos, vendedor, escritório ou canal (escritório e canal valem para quem tem cliente neles). O aviso chega depois que o vendedor sincroniza.',
+    nome: 'avisos',
+    chave: 'id',
+    rotuloNovo: 'Novo aviso',
+    campos: [
+      { chave: 'titulo', rotulo: 'Título', tipo: 'texto', obrigatorio: true, maxLength: 80, dica: 'Ex.: Nova tabela de preços' },
+      { chave: 'mensagem', rotulo: 'Mensagem', tipo: 'area', obrigatorio: true, maxLength: 1000 },
+      { chave: 'nivel', rotulo: 'Destaque', tipo: 'select', opcoes: NIVEIS_AVISO },
+      { chave: 'escopo', rotulo: 'Para quem', tipo: 'select', opcoes: ESCOPOS_AVISO },
+      { chave: 'escopo_valor', rotulo: 'Código(s) do vendedor / escritório / canal', tipo: 'texto', maxLength: 400, obrigatorio: true, dica: 'Vários separados por vírgula', quando: (v) => !['geral', ''].includes(String(v.escopo ?? 'geral')) },
+      { chave: 'vigencia_ini', rotulo: 'Mostrar a partir de', tipo: 'data', dica: 'Vazio = já' },
+      { chave: 'vigencia_fim', rotulo: 'Mostrar até', tipo: 'data', dica: 'Vazio = sem fim' },
+    ],
+    colunas: [
+      { chave: 'titulo', rotulo: 'Aviso', formatar: (v, l) => `${v ?? ''}${l.mensagem ? ` — ${String(l.mensagem).slice(0, 70)}${String(l.mensagem).length > 70 ? '…' : ''}` : ''}` },
+      { chave: 'nivel', rotulo: 'Destaque', formatar: (v) => String(NIVEIS_AVISO.find((n) => n.v === v)?.r ?? v ?? '') },
+      { chave: 'escopo', rotulo: 'Para', formatar: (v, l) => (v === 'geral' || !v ? 'Todos' : `${ESCOPOS_AVISO.find((e) => e.v === v)?.r ?? v}: ${l.escopo_valor ?? ''}`) },
+      { chave: 'vigencia_ini', rotulo: 'Período', formatar: (_v, l) => (l.vigencia_ini || l.vigencia_fim ? `${l.vigencia_ini ? dataBR(l.vigencia_ini) : 'já'} a ${l.vigencia_fim ? dataBR(l.vigencia_fim) : 'sem fim'}` : 'sempre') },
+    ],
+  },
+  'perguntas-visita': {
+    titulo: 'Perguntas da visita',
+    descricao: 'Perguntas que o vendedor responde durante a visita, na tela da visita do app. Escolha a quem vale (todos, vendedor, escritório, canal ou cliente) e se é obrigatória: a visita só conclui com todas as obrigatórias respondidas. A ordem menor aparece primeiro.',
+    nome: 'perguntas-visita',
+    chave: 'id',
+    rotuloNovo: 'Nova pergunta',
+    campos: [
+      { chave: 'texto', rotulo: 'Pergunta', tipo: 'texto', obrigatorio: true, maxLength: 200, dica: 'Ex.: O produto está exposto na gôndola?' },
+      { chave: 'tipo', rotulo: 'Tipo de resposta', tipo: 'select', opcoes: TIPOS_PERGUNTA },
+      { chave: 'opcoes', rotulo: 'Opções de resposta', tipo: 'texto', maxLength: 400, obrigatorio: true, dica: 'Separe com ponto e vírgula. Ex.: Ótimo; Bom; Ruim', quando: (v) => v.tipo === 'opcoes' },
+      { chave: 'obrigatoria', rotulo: 'Obrigatória', tipo: 'bool' },
+      { chave: 'escopo', rotulo: 'A quem vale', tipo: 'select', opcoes: ESCOPOS_PERGUNTA },
+      { chave: 'escopo_valor', rotulo: 'Código(s) do vendedor / escritório / canal / cliente', tipo: 'texto', maxLength: 400, obrigatorio: true, dica: 'Vários separados por vírgula', quando: (v) => !['geral', ''].includes(String(v.escopo ?? 'geral')) },
+      { chave: 'ordem', rotulo: 'Ordem', tipo: 'numero', dica: 'Menor aparece primeiro' },
+    ],
+    colunas: [
+      { chave: 'texto', rotulo: 'Pergunta' },
+      { chave: 'tipo', rotulo: 'Resposta', formatar: (v, l) => (v === 'opcoes' ? `Opções: ${l.opcoes ?? ''}` : String(TIPOS_PERGUNTA.find((t) => t.v === v)?.r ?? v ?? '')) },
+      { chave: 'obrigatoria', rotulo: 'Obrigatória', formatar: sim },
+      { chave: 'escopo', rotulo: 'Vale para', formatar: (v, l) => (v === 'geral' || !v ? 'Todos' : `${ESCOPOS_PERGUNTA.find((e) => e.v === v)?.r ?? v}: ${l.escopo_valor ?? ''}`) },
+      { chave: 'ordem', rotulo: 'Ordem' },
+    ],
+  },
   feriados: {
     titulo: 'Feriados',
     descricao: 'A entrega nunca cai em feriado. Sem UF = nacional; com UF = estadual; com UF e cidade = municipal (a cidade é comparada com o endereço do cliente no SAP).',
@@ -150,5 +220,5 @@ export const CADASTROS: Record<string, DefCadastro> = {
   },
 };
 
-export const ordemMenu = ['tipos-bonificacao', 'centros-custo', 'destaques', 'incentivos', 'feriados'];
+export const ordemMenu = ['avisos', 'tipos-bonificacao', 'centros-custo', 'destaques', 'incentivos', 'perguntas-visita', 'feriados'];
 export { traco };

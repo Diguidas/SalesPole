@@ -111,6 +111,28 @@ export function ClienteDetalheScreen() {
     </table>
   );
 
+  const MiniPedidos = ({ lista }: { lista: Pedido[] }) => (
+    <div className="mini-lista">
+      {lista.map((p) => (
+        <div key={p.ordem} className="mini-item clicavel-leve" onClick={() => abrirPedido(p.ordem)}>
+          <div className="mini-esq"><strong>{p.ordem}</strong><span className="suave">{dataBR(p.dt_criacao)}</span></div>
+          <div className="mini-dir"><span>{moeda(p.valor)}</span><span className={`selo ${tom(p.status)}`} title={p.status ?? ''}>{p.status ?? '—'}</span></div>
+        </div>
+      ))}
+    </div>
+  );
+
+  const MiniProdutos = ({ lista }: { lista: Produto[] }) => (
+    <div className="mini-lista">
+      {lista.map((p) => (
+        <div key={p.cod_produto} className="mini-item">
+          <div className="mini-esq"><span className="nome" title={p.denominacao ?? ''}>{p.denominacao ?? p.cod_produto}</span><span className="suave">{p.cod_produto} · última {dataBR(p.ultima_compra)}</span></div>
+          <div className="mini-dir"><strong>{p.quantidade.toLocaleString('pt-BR')} {p.unidade ?? ''}</strong></div>
+        </div>
+      ))}
+    </div>
+  );
+
   const ListaVisitas = ({ lista }: { lista: Visita[] }) => (
     <>
       {lista.map((v) => (
@@ -283,11 +305,11 @@ export function ClienteDetalheScreen() {
         </Secao>
 
         <Secao titulo="Últimos pedidos" aoVerMais={c.ultimos_pedidos.length > 3 ? verPedidos : undefined} rotuloMais={`Ver os ${c.ultimos_pedidos.length}`}>
-          {c.ultimos_pedidos.length === 0 ? <p className="suave">Nenhum pedido nos últimos 12 meses.</p> : <TabelaPedidos lista={c.ultimos_pedidos.slice(0, 3)} />}
+          {c.ultimos_pedidos.length === 0 ? <p className="suave">Nenhum pedido nos últimos 12 meses.</p> : <MiniPedidos lista={c.ultimos_pedidos.slice(0, 3)} />}
         </Secao>
 
         <Secao titulo="Produtos que mais compra" aoVerMais={c.produtos_mais_comprados.length > 3 ? verProdutos : undefined} rotuloMais={`Ver os ${c.produtos_mais_comprados.length}`}>
-          {c.produtos_mais_comprados.length === 0 ? <p className="suave">Sem histórico de itens deste cliente.</p> : <TabelaProdutos lista={c.produtos_mais_comprados.slice(0, 3)} />}
+          {c.produtos_mais_comprados.length === 0 ? <p className="suave">Sem histórico de itens deste cliente.</p> : <MiniProdutos lista={c.produtos_mais_comprados.slice(0, 3)} />}
         </Secao>
 
         <Secao titulo="Visitas recentes" aoVerMais={c.visitas.length > 2 ? verVisitas : undefined} rotuloMais={`Ver as ${c.visitas.length}`}>

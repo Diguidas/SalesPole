@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { useGavetas } from '../gavetas';
 import { PedidoDetalhe } from './PedidoDetalhe';
+import { imprimirPedidoApp } from '../pdfPedido';
 
 interface PedidoSap {
   ordem: string; cod_cliente: string; cliente: string | null; rota: string | null; vendedor: string | null;
@@ -44,6 +45,19 @@ export function PedidosScreen() {
   const [vendedores, setVendedores] = useState<Vendedor[]>([]);
   const [dados, setDados] = useState<Lista<PedidoSap | PedidoApp> | null>(null);
   const [erro, setErro] = useState<string | null>(null);
+  const [gerandoPdf, setGerandoPdf] = useState<string | null>(null);
+
+  async function gerarPdf(id: string) {
+    setGerandoPdf(id);
+    setErro(null);
+    try {
+      await imprimirPedidoApp(id);
+    } catch (e) {
+      setErro((e as Error).message);
+    } finally {
+      setGerandoPdf(null);
+    }
+  }
 
   useEffect(() => {
     api<Vendedor[]>('/painel/pedido-novo/vendedores').then(setVendedores).catch(() => undefined);
@@ -152,7 +166,7 @@ export function PedidosScreen() {
             </table>
           ) : (
             <table>
-              <thead><tr><th>Código</th><th>Cliente</th><th>Vendedor</th><th>Recebido</th><th>Itens</th><th>Ordens no SAP</th><th>Status</th></tr></thead>
+              <thead><tr><th>Código</th><th>Cliente</th><th>Vendedor</th><th>Recebido</th><th>Itens</th><th>Ordens no SAP</th><th>Status</th><th>PDF</th></tr></thead>
               <tbody>
                 {(dados.itens as PedidoApp[]).map((p) => (
                   <tr key={p.id}>
@@ -166,6 +180,9 @@ export function PedidosScreen() {
                       <span className={`selo ${p.status === 'enviado' ? 'ok' : p.status === 'erro' || p.status === 'rejeitado' ? 'erro' : 'aviso'}`}>{STATUS_APP.find(([v]) => v === p.status)?.[1] ?? p.status}</span>
                       {p.erro ? <div className="erro-msg" style={{ margin: '4px 0 0' }}>{p.erro}</div> : null}
                       {p.motivo_rejeicao ? <div className="suave">Motivo: {p.motivo_rejeicao}</div> : null}
+                    </td>
+                    <td>
+                      <button className="btn" disabled={gerandoPdf === p.id || p.status === 'rascunho'} onClick={() => gerarPdf(p.id)} title="Abre a confirmação do pedido; escolha Salvar como PDF">{gerandoPdf === p.id ? 'Gerando…' : 'PDF'}</button>
                     </td>
                   </tr>
                 ))}

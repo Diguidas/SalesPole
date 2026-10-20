@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../auth';
+import { AndamentoTab, CarteirasTab } from './SincronizacaoTab';
 
 interface Sinc { recurso: string; escopo: string; operacional: boolean; ultimo_sucesso: string | null; idade_min: number | null; erro: string | null; erro_em: string | null; situacao: 'ok' | 'atrasado' | 'erro' }
 interface PedidoProblema {
@@ -42,6 +43,8 @@ function idade(min: number | null) {
 export function MonitorScreen() {
   const { usuario } = useAuth();
   const podeReenviar = usuario?.papel === 'admin' || usuario?.papel === 'aprovador';
+  const ehAdmin = usuario?.papel === 'admin';
+  const [aba, setAba] = useState<'saude' | 'carteiras' | 'andamento'>('saude');
   const [m, setM] = useState<Monitor | null>(null);
   const [erro, setErro] = useState<string | null>(null);
   const [ocupado, setOcupado] = useState<string | null>(null);
@@ -86,12 +89,25 @@ export function MonitorScreen() {
       <p className="sub">
         Saúde da integração com o SAP e da fila de pedidos.{m ? ` Atualizado às ${new Date(m.gerado_em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}; renova sozinho a cada minuto.` : ''}
       </p>
-      <div className="chips"><button className="chip" onClick={carregar}>Atualizar agora</button></div>
-      {erro && <p className="erro-msg">{erro}</p>}
-      {aviso && <p style={{ color: '#166534', fontSize: 13 }}>{aviso}</p>}
-      {!m && !erro && <div className="vazio">Carregando…</div>}
+      {ehAdmin && (
+        <div className="abas" role="tablist">
+          <button role="tab" aria-selected={aba === 'saude'} className={`aba${aba === 'saude' ? ' ativa' : ''}`} onClick={() => setAba('saude')}>Saúde</button>
+          <button role="tab" aria-selected={aba === 'carteiras'} className={`aba${aba === 'carteiras' ? ' ativa' : ''}`} onClick={() => setAba('carteiras')}>Sincronizar carteiras</button>
+          <button role="tab" aria-selected={aba === 'andamento'} className={`aba${aba === 'andamento' ? ' ativa' : ''}`} onClick={() => setAba('andamento')}>Andamento e histórico</button>
+        </div>
+      )}
+      {aba === 'carteiras' && ehAdmin && <CarteirasTab aoPedir={() => setAba('andamento')} />}
+      {aba === 'andamento' && ehAdmin && <AndamentoTab />}
+      {aba === 'saude' && (
+        <>
+          <div className="chips"><button className="chip" onClick={carregar}>Atualizar agora</button></div>
+          {erro && <p className="erro-msg">{erro}</p>}
+          {aviso && <p style={{ color: '#166534', fontSize: 13 }}>{aviso}</p>}
+          {!m && !erro && <div className="vazio">Carregando…</div>}
+        </>
+      )}
 
-      {m && r && (
+      {aba === 'saude' && m && r && (
         <>
           <div className="cartoes">
             <Cartao titulo="Sincronização" valor={r.sincs_com_problema} bom="Tudo em dia" ruim="com problema" />

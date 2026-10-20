@@ -195,7 +195,7 @@ function Colunas({ itens }: { itens: Grupo[] }) {
     <div className="colunas">
       {itens.map((g) => (
         <div className="coluna" key={g.chave} title={`${nomeMes(g.chave)}: ${moeda(g.valor)} · ${inteiro(g.pedidos)} pedidos`}>
-          <div className="coluna-valor">{abrev(g.valor)}</div>
+          <div className="coluna-valor">{abrev(g.valor).replace("R$ ", "")}</div>
           <div className="coluna-trilho"><div className="coluna-barra" style={{ height: `${Math.max((g.valor / max) * 100, 2)}%` }} /></div>
           <div className="coluna-rotulo">{nomeMes(g.chave)}</div>
         </div>

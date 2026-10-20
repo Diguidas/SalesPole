@@ -13,19 +13,6 @@ interface Vendedor {
   erro: string | null;
 }
 
-interface Rodada {
-  rodando: boolean;
-  origem: 'cron' | 'painel' | null;
-  iniciado_em: string | null;
-  terminou_em: string | null;
-  total: number;
-  feitos: number;
-  puladas?: number;
-  atual: string | null;
-  falhas: Array<{ cod_vendedor: string; erro: string }>;
-  interrompida?: boolean;
-}
-
 const dataHora = (iso: string) => new Date(iso).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
 
 /**
@@ -39,7 +26,6 @@ export function VendedoresPanel() {
   const [busca, setBusca] = useState('');
   const [filtro, setFiltro] = useState<'todos' | 'marcados' | 'app' | 'sem'>('todos');
   const [ocupado, setOcupado] = useState(false);
-  const [rodada, setRodada] = useState<Rodada | null>(null);
   const [acesso, setAcesso] = useState<{ vendedor: Vendedor; email: string; senha: string; ativo: boolean; novo: boolean } | null>(null);
   const [salvandoAcesso, setSalvandoAcesso] = useState(false);
   const [erroAcesso, setErroAcesso] = useState<string | null>(null);
@@ -58,27 +44,6 @@ export function VendedoresPanel() {
     void carregar();
   }, [carregar]);
 
-  // andamento da sincronizacao: ao abrir (pode ter outra rodada rodando) e a cada 3 s enquanto roda
-  const rodando = rodada?.rodando === true;
-  useEffect(() => {
-    let vivo = true;
-    const ler = () =>
-      api<Rodada>('/painel/vendedores/sincronizacao')
-        .then((r) => {
-          if (!vivo) return;
-          setRodada(r);
-          if (!r.rodando) void carregar();
-        })
-        .catch(() => undefined);
-    void ler();
-    if (!rodando) return () => { vivo = false; };
-    const t = setInterval(ler, 3000);
-    return () => {
-      vivo = false;
-      clearInterval(t);
-    };
-  }, [rodando, carregar]);
-
   async function importar() {
     setOcupado(true);
     setErro(null);
@@ -91,16 +56,6 @@ export function VendedoresPanel() {
       setErro((e as Error).message);
     } finally {
       setOcupado(false);
-    }
-  }
-
-  async function sincronizarAgora() {
-    setErro(null);
-    setAviso(null);
-    try {
-      setRodada(await api<Rodada>('/painel/vendedores/sincronizar', { method: 'POST', body: {} }));
-    } catch (e) {
-      setErro((e as Error).message);
     }
   }
 
@@ -156,13 +111,10 @@ export function VendedoresPanel() {
     <>
       <p className="suave" style={{ marginTop: 0 }}>
         {lista ? `${lista.length} vendedores · ${marcados} nos indicadores · ${doApp} com acesso ao app. ` : ''}
-        Os marcados para indicadores atualizam 2 vezes por dia (7h e 14h, de segunda a sábado). Quem tem acesso ao app é atualizado a cada 15 minutos.
+        Os marcados para indicadores atualizam 2 vezes por dia (7h e 14h, de segunda a sábado). Quem tem acesso ao app é atualizado a cada 15 minutos. Para sincronizar na hora, use Monitor → Sincronização.
       </p>
       <div className="chips">
         <button className="btn ok" disabled={ocupado} onClick={importar}>{ocupado ? 'Aguarde…' : 'Importar vendedores do SAP'}</button>
-        <button className="btn" disabled={ocupado || rodando || marcados === 0} onClick={sincronizarAgora} title="Atualiza agora a carteira e os pedidos dos vendedores marcados (sem esperar as 7h/14h)">
-          {rodando ? 'Sincronizando…' : 'Sincronizar agora'}
-        </button>
         <input className="entrada" placeholder="Buscar por nome, código, rota ou e-mail" value={busca} onChange={(e) => setBusca(e.target.value)} />
       </div>
       <div className="chips">
@@ -170,30 +122,6 @@ export function VendedoresPanel() {
         <button className="chip" onClick={carregar}>Atualizar</button>
       </div>
 
-      {rodada && (rodada.rodando || rodada.terminou_em || rodada.interrompida) && (
-        <div className="card" style={{ padding: 12 }}>
-          {rodada.rodando ? (
-            <>
-              <strong>Sincronizando… {rodada.feitos} de {rodada.total} rotas</strong>
-              <div className="barra-trilho" style={{ margin: '8px 0' }}><div className="barra" style={{ width: `${rodada.total ? Math.max((rodada.feitos / rodada.total) * 100, 3) : 3}%` }} /></div>
-              <span className="suave">{rodada.atual ? `Agora: vendedor ${rodada.atual}. ` : ''}{rodada.puladas ? `${rodada.puladas} rota${rodada.puladas === 1 ? '' : 's'} já atualizada${rodada.puladas === 1 ? '' : 's'} há menos de 2 h foi pulada. ` : ''}A primeira vez de cada rota busca 12 meses de pedidos e demora mais. Você pode sair desta tela: a rodada continua no servidor.</span>
-            </>
-          ) : rodada.interrompida ? (
-            <>
-              <strong style={{ color: '#b45309' }}>A última sincronização foi interrompida em {rodada.feitos} de {rodada.total} rotas.</strong>
-              <span className="suave"> O servidor reiniciou no meio{rodada.iniciado_em ? ` (começou ${dataHora(rodada.iniciado_em)})` : ''}. Clique em "Sincronizar agora" para continuar; o que já foi baixado fica salvo.</span>
-            </>
-          ) : (
-            <>
-              <strong>Última sincronização ({rodada.origem === 'cron' ? 'automática' : 'pelo painel'}): {rodada.feitos - rodada.falhas.length} de {rodada.total} rotas ok</strong>
-              <span className="suave"> · terminou {dataHora(rodada.terminou_em!)}{rodada.puladas ? ` · ${rodada.puladas} já estava${rodada.puladas === 1 ? '' : 'm'} atualizada${rodada.puladas === 1 ? '' : 's'} (menos de 2 h) e foi pulada` : ''}</span>
-              {rodada.falhas.map((f) => (
-                <div key={f.cod_vendedor} className="erro-msg" style={{ margin: '4px 0 0' }}>Vendedor {f.cod_vendedor}: {f.erro}</div>
-              ))}
-            </>
-          )}
-        </div>
-      )}
       {aviso && <p style={{ color: '#166534', fontSize: 13 }}>{aviso}</p>}
       {erro && <p className="erro-msg">{erro}</p>}
 

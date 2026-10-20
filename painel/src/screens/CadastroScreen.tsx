@@ -186,6 +186,18 @@ function CampoForm({ campo, valor, bloqueado, aoMudar }: { campo: Campo; valor: 
         <select id={id} value={String(valor)} onChange={(e) => aoMudar(e.target.value)}>
           {campo.opcoes?.map((o) => <option key={o.v} value={o.v}>{o.r}</option>)}
         </select>
+      ) : campo.tipo === 'area' ? (
+        <textarea
+          id={id}
+          rows={5}
+          maxLength={campo.maxLength}
+          value={String(valor)}
+          disabled={bloqueado}
+          required={campo.obrigatorio}
+          placeholder={campo.dica}
+          onChange={(e) => aoMudar(e.target.value)}
+          style={{ font: 'inherit', padding: 9, border: '1px solid #e2e8f0', borderRadius: 8, resize: 'vertical' }}
+        />
       ) : (
         <input
           id={id}

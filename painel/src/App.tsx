@@ -2,6 +2,8 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { useAuth } from './auth';
 import { Shell } from './screens/Shell';
 import { LoginScreen } from './screens/LoginScreen';
+import { ProdutosScreen } from './screens/ProdutosScreen';
+import { ListasPrecoScreen } from './screens/ListasPrecoScreen';
 import { BonificacoesScreen } from './screens/BonificacoesScreen';
 import { CadastroScreen } from './screens/CadastroScreen';
 import { ParametrosScreen } from './screens/ParametrosScreen';
@@ -28,6 +30,8 @@ export function App() {
         <Route path="pedidos" element={<PedidosScreen />} />
         <Route path="clientes" element={<ClientesScreen />} />
         <Route path="clientes/:cod" element={<ClienteDetalheScreen />} />
+        <Route path="produtos" element={<ProdutosScreen />} />
+        <Route path="listas-preco" element={<ListasPrecoScreen />} />
         <Route path="bonificacoes" element={<BonificacoesScreen />} />
         <Route path="pedidos-antecipados" element={<Navigate to="/pedidos?antecipado=1&pendentes=1" replace />} />
         <Route path="cadastros/:nome" element={<CadastroScreen />} />
