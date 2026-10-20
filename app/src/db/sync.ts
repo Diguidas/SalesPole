@@ -28,6 +28,10 @@ export interface PullResposta {
   feriados?: Linha[];
   /** visitas do vendedor dos ultimos dias (reconhece visita feita em outro aparelho e traz a validacao do painel) */
   visitas?: Linha[];
+  /** perguntas que o painel manda o vendedor responder na visita (cadastro inteiro a cada pull) */
+  visita_perguntas?: Linha[];
+  /** avisos do painel vigentes para o vendedor (pop-up ao abrir o app) */
+  avisos?: Linha[];
   /** totais de 12 meses (so vem quando mudaram): vendas por cliente/mes e o que cada cliente compra */
   historico_mes?: Linha[];
   historico_produto?: Linha[];
@@ -241,6 +245,25 @@ export async function aplicarPull(db: SQLiteDatabase, r: PullResposta): Promise<
           txt(x.linha_id), txt(x.grupo_id), txt(x.categoria_id), txt(x.marca), num(x.qtd_minima) ?? 0,
           num(x.desconto_pct) ?? 0, num(x.desconto_extra_max_pct) ?? 0,
         ]),
+      );
+    }
+
+    if (r.avisos) {
+      await db.runAsync('DELETE FROM avisos');
+      await inserir(
+        db,
+        'avisos',
+        ['id', 'titulo', 'mensagem', 'nivel', 'escopo', 'escopo_valor', 'vigencia_ini', 'vigencia_fim', 'atualizado_em'],
+        r.avisos.map((x) => [txt(x.id), txt(x.titulo), txt(x.mensagem), txt(x.nivel) ?? 'info', txt(x.escopo) ?? 'geral', txt(x.escopo_valor), txt(x.vigencia_ini), txt(x.vigencia_fim), txt(x.updated_at)]),
+      );
+    }
+    if (r.visita_perguntas) {
+      await db.runAsync('DELETE FROM visita_perguntas');
+      await inserir(
+        db,
+        'visita_perguntas',
+        ['id', 'texto', 'tipo', 'opcoes', 'obrigatoria', 'escopo', 'escopo_valor', 'ordem'],
+        r.visita_perguntas.map((x) => [txt(x.id), txt(x.texto), txt(x.tipo) ?? 'texto', txt(x.opcoes), flag(x.obrigatoria), txt(x.escopo) ?? 'geral', txt(x.escopo_valor), num(x.ordem) ?? 0]),
       );
     }
 

@@ -37,7 +37,10 @@ export default function PedidosDoCliente() {
                 <Text style={estilos.itemSuave}>{dataBR(p.data)}{p.valor !== null ? ` · ${moeda(p.valor)}` : ''}</Text>
                 {p.erro ? <Text style={estilos.erro} numberOfLines={3}>{p.erro}</Text> : null}
               </View>
-              {selo ? <Selo texto={selo.texto} tom={selo.tom} /> : null}
+              <View style={{ alignItems: 'flex-end', gap: 4 }}>
+  {p.bonificacao ? <Selo texto="Bonificação" tom="neutro" /> : null}
+  {selo ? <Selo texto={selo.texto} tom={selo.tom} /> : null}
+</View>
             </Card>
           );
         })

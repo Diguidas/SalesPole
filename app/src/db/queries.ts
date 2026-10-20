@@ -131,6 +131,8 @@ export interface PedidoLista {
   status: string | null;
   codigo: string | null; // sequencial do app (pedido_externo no SAP)
   erro: string | null;
+  /** 1 = pedido de bonificacao (so existe para pedidos criados no app) */
+  bonificacao: number;
 }
 
 /** Pedidos de um cliente: ordens do SAP + pedidos do app que ainda nao viraram ordem. */
@@ -138,10 +140,10 @@ export function pedidosDoCliente(db: SQLiteDatabase, cod: string, limite = 30) {
   return db.getAllAsync<PedidoLista>(
     `SELECT * FROM (
         SELECT 'sap' AS origem, ordem AS chave, dt_criacao AS data, valor, status,
-               pedido_externo AS codigo, NULL AS erro
+               pedido_externo AS codigo, NULL AS erro, 0 AS bonificacao
           FROM pedidos_sap WHERE cod_cliente = ?
         UNION ALL
-        SELECT 'app', id, substr(criado_em, 1, 10), NULL, status, codigo, erro
+        SELECT 'app', id, substr(criado_em, 1, 10), NULL, status, codigo, erro, (tipo = 'bonificacao')
           FROM pedidos_app a WHERE cod_cliente = ?
            AND (status <> 'enviado' OR NOT EXISTS (SELECT 1 FROM pedidos_sap s WHERE s.pedido_externo = a.codigo))
      ) ORDER BY data DESC LIMIT ?`,
@@ -245,10 +247,10 @@ export function listarPedidos(db: SQLiteDatabase, filtro: FiltroPedidos, limite 
   return db.getAllAsync<PedidoGeral>(
     `SELECT * FROM (
         SELECT 'sap' AS origem, p.ordem AS chave, p.cod_cliente, c.nome_fantasia AS nome_cliente,
-               p.dt_criacao AS data, p.valor, p.status, p.pedido_externo AS codigo, NULL AS erro
+               p.dt_criacao AS data, p.valor, p.status, p.pedido_externo AS codigo, NULL AS erro, 0 AS bonificacao
           FROM pedidos_sap p LEFT JOIN clientes c ON c.cod_cliente = p.cod_cliente
         UNION ALL
-        SELECT 'app', a.id, a.cod_cliente, c.nome_fantasia, substr(a.criado_em, 1, 10), NULL, a.status, a.codigo, COALESCE(a.motivo_rejeicao, a.erro)
+        SELECT 'app', a.id, a.cod_cliente, c.nome_fantasia, substr(a.criado_em, 1, 10), NULL, a.status, a.codigo, COALESCE(a.motivo_rejeicao, a.erro), (a.tipo = 'bonificacao')
           FROM pedidos_app a LEFT JOIN clientes c ON c.cod_cliente = a.cod_cliente
          WHERE a.status <> 'enviado'
             OR NOT EXISTS (SELECT 1 FROM pedidos_sap s WHERE s.pedido_externo = a.codigo)

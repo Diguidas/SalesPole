@@ -3,6 +3,7 @@ import { SQLiteProvider } from 'expo-sqlite';
 import { Suspense } from 'react';
 import { migrar } from '@/db/schema';
 import { SyncProvider } from '@/lib/sync-context';
+import { AvisosPopup } from '@/ui/AvisosPopup';
 import { Carregando } from '@/ui/components';
 import { cor } from '@/ui/theme';
 
@@ -16,6 +17,7 @@ export default function AppLayout() {
     <Suspense fallback={<Carregando />}>
       <SQLiteProvider databaseName="salespole.db" onInit={migrar} useSuspense>
         <SyncProvider>
+          <AvisosPopup />
           <Stack
             screenOptions={{
               headerStyle: { backgroundColor: cor.primaria },

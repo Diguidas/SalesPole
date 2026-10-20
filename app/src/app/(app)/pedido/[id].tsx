@@ -22,7 +22,9 @@ import { ajustarDescontos, incentivoAplicavel, maxManual } from '@/domain/incent
 import { lerQuantidade, validarQuantidade } from '@/domain/quantidade';
 import { dataBR, dataComDia, hojeISO, moeda, numero, textoFormas, textoPrazo } from '@/lib/format';
 import { useSync } from '@/lib/sync-context';
-import { Botao, Card, Carregando, Chip, Linha, Secao, Segmentado, Selo, Vazio } from '@/ui/components';
+import { Botao, Card, Carregando, Linha, Secao, Segmentado, Selo, Vazio } from '@/ui/components';
+import { Dropdown } from '@/ui/Dropdown';
+import { compartilharPdfPedido } from '@/db/pedidoPdf';
 import { FotoProduto } from '@/ui/FotoProduto';
 import { ModalQuantidade } from '@/ui/ModalQuantidade';
 import { seloDoPedido } from '@/ui/status';
@@ -61,6 +63,7 @@ export default function PedidoTela() {
   const [just, setJust] = useState('');
   const [editando, setEditando] = useState<ItemPedido | null>(null);
   const [ocupado, setOcupado] = useState(false);
+  const [gerandoPdf, setGerandoPdf] = useState(false);
 
   useEffect(() => {
     if (pedido) {
@@ -203,7 +206,12 @@ export default function PedidoTela() {
       const comPreco = ajustar(itens).map((i) => {
         const pr = info?.[i.produto]?.preco ?? undefined;
         const prRef = pr ? { ...pr, descontoMax: Math.max(pr.descontoMax ?? 0, i.descontoLiberado ?? 0) } : undefined;
-        return { ...i, preco: precoParaEnvio(prRef, i.unidade, i.desconto) };
+        return {
+          ...i,
+          preco: precoParaEnvio(prRef, i.unidade, i.desconto),
+          // preco de tabela por caixa: o PDF de confirmacao mostra tabela, desconto e preco final
+          precoTabela: pr && pr.unidade === i.unidade && pr.valor > 0 ? pr.valor.toFixed(2) : null,
+        };
       });
       await salvarItens(db, id, comPreco);
       await confirmarPedido(db, id);
@@ -236,6 +244,17 @@ export default function PedidoTela() {
     }
   }
 
+  async function compartilharPdf() {
+    setGerandoPdf(true);
+    try {
+      await compartilharPdfPedido(db, id);
+    } catch (e) {
+      Alert.alert('Não foi possível gerar o PDF', e instanceof Error ? e.message : 'Tente de novo.');
+    } finally {
+      setGerandoPdf(false);
+    }
+  }
+
   async function duplicar() {
     const novo = await duplicarPedidoApp(db, id);
     if (novo) router.replace(`/pedido/${novo}`);
@@ -264,6 +283,7 @@ export default function PedidoTela() {
       <Card>
         <Text style={estilos.cliente}>{nomeCliente}</Text>
         <View style={estilos.selos}>
+          {pedido.tipo === 'bonificacao' ? <Selo texto="Bonificação" tom="neutro" /> : null}
           {selo ? <Selo texto={selo.texto} tom={selo.tom} /> : null}
           {cliente?.bloqueado ? <Selo texto="Cliente bloqueado" tom="erro" /> : null}
           {cliente?.pagamento_antecipado ? <Selo texto="Pagamento antecipado" tom="aviso" /> : null}
@@ -309,18 +329,22 @@ export default function PedidoTela() {
           {bonificacao ? (
             <>
               <Text style={[estilos.rotulo, { marginTop: espaco.sm }]}>Tipo de bonificação</Text>
-              <View style={estilos.chips}>
-                {(tiposBon ?? []).map((t) => (
-                  <Chip key={t.codigo} texto={`${t.codigo} · ${t.descricao ?? ''}`} ativo={pedido.tipo_bonificacao === t.codigo} onPress={() => mudarTipo({ tipo_bonificacao: t.codigo })} />
-                ))}
-              </View>
+              <Dropdown
+                titulo="Tipo de bonificação"
+                valor={pedido.tipo_bonificacao}
+                opcoes={(tiposBon ?? []).map((t) => ({ valor: t.codigo, texto: `${t.codigo} · ${t.descricao ?? ''}` }))}
+                onChange={(v) => mudarTipo({ tipo_bonificacao: v })}
+                placeholder="Selecione o tipo"
+              />
               {tiposBon && !tiposBon.length ? <Text style={estilos.dica}>Nenhum tipo cadastrado. Peça para cadastrar no painel e sincronize.</Text> : null}
               <Text style={[estilos.rotulo, { marginTop: espaco.sm }]}>Centro de custo</Text>
-              <View style={estilos.chips}>
-                {(centros ?? []).map((c) => (
-                  <Chip key={c.codigo} texto={`${c.codigo} · ${c.descricao ?? ''}`} ativo={pedido.centro_custo === c.codigo} onPress={() => mudarTipo({ centro_custo: c.codigo })} />
-                ))}
-              </View>
+              <Dropdown
+                titulo="Centro de custo"
+                valor={pedido.centro_custo}
+                opcoes={(centros ?? []).map((c) => ({ valor: c.codigo, texto: `${c.codigo} · ${c.descricao ?? ''}` }))}
+                onChange={(v) => mudarTipo({ centro_custo: v })}
+                placeholder="Selecione o centro de custo"
+              />
               {centros && !centros.length ? <Text style={estilos.dica}>Nenhum centro de custo cadastrado. Peça para cadastrar no painel e sincronize.</Text> : null}
               <Text style={[estilos.rotulo, { marginTop: espaco.sm }]}>Justificativa (só para quem aprova)</Text>
               <TextInput
@@ -459,6 +483,8 @@ export default function PedidoTela() {
             {pedido.status === 'erro' && semCodigo ? (
               <Text style={estilos.dica}>Este pedido foi recusado antes de chegar ao SAP. Duplique para corrigir e enviar de novo.</Text>
             ) : null}
+            <Botao titulo={gerandoPdf ? 'Gerando PDF…' : 'Compartilhar PDF do pedido'} onPress={compartilharPdf} carregando={gerandoPdf} />
+            <Text style={estilos.dica}>O PDF confirma o pedido mesmo sem internet. Se o SAP ainda não devolveu o número da ordem, gere de novo depois para atualizar.</Text>
             <Botao titulo="Duplicar pedido" onPress={duplicar} tom="neutro" />
             {semCodigo && (pedido.status === 'pendente' || pedido.status === 'erro') ? <Botao titulo="Descartar" onPress={descartar} tom="neutro" /> : null}
           </>
@@ -554,7 +580,6 @@ const estilos = StyleSheet.create({
   cardAviso: { backgroundColor: cor.avisoFundo, borderColor: cor.amarelo, gap: 4 },
   avisoTexto: { fontSize: 13, color: cor.aviso },
   dica: { fontSize: 12, color: cor.textoSuave, marginTop: 4 },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   prazoAviso: { color: cor.aviso, fontSize: 12, marginTop: espaco.sm },
   minimoAviso: { color: cor.aviso, fontWeight: '700', fontSize: 13, marginTop: 4 },
   minimoOk: { color: cor.ok, fontWeight: '600', fontSize: 13, marginTop: 4 },

@@ -1,6 +1,7 @@
 import * as Crypto from 'expo-crypto';
 import type { SQLiteDatabase } from 'expo-sqlite';
 import { avaliarCheckin } from '@/domain/geo';
+import type { AreaCliente } from '@/domain/preco';
 
 // Roteiro de visita (tudo local/offline; o envio ao servidor esta em visitasPush.ts).
 // Regras: uma visita por cliente por dia; o check-in exige GPS e uma foto de FACHADA; para concluir,
@@ -26,6 +27,8 @@ export interface Visita {
   motivo_nao_venda: string | null;
   observacao: string | null;
   pedido_id: string | null;
+  /** JSON: lista de RespostaVisita (perguntas do painel respondidas na visita) */
+  respostas: string | null;
   /** pendente | validada | recusada (decidido no painel) */
   validacao: string | null;
   validacao_obs: string | null;
@@ -137,6 +140,8 @@ export interface Conclusao {
   /** obrigatorio quando nao vendeu (digitado pelo vendedor) */
   motivo?: string;
   observacao?: string;
+  /** resposta por id de pergunta (as perguntas obrigatorias que valem para o cliente precisam estar aqui) */
+  respostas?: Record<string, string>;
 }
 
 /** Check-out. Lanca Error com a mensagem para o vendedor se faltar algo. */
@@ -159,11 +164,32 @@ export async function concluirVisita(db: SQLiteDatabase, id: string, c: Conclusa
     pedidoId = p.id;
   }
 
+
+  // perguntas do painel: as obrigatorias bloqueiam a conclusao; so grava o que foi respondido
+  const cli = await db.getFirstAsync<{ cod_cliente: string; areas: string | null }>('SELECT cod_cliente, areas FROM clientes WHERE cod_cliente = ?', v.cod_cliente);
+  let areas: AreaCliente[] = [];
+  try {
+    areas = cli?.areas ? (JSON.parse(cli.areas) as AreaCliente[]) : [];
+  } catch {
+    areas = [];
+  }
+  const perguntas = await perguntasDaVisita(db, { cod_cliente: v.cod_cliente, areas });
+  const respostas: RespostaVisita[] = [];
+  const faltam: string[] = [];
+  for (const p of perguntas) {
+    const bruta = c.respostas?.[p.id]?.trim();
+    if (!bruta) {
+      if (p.obrigatoria) faltam.push(p.texto);
+      continue;
+    }
+    respostas.push({ pergunta_id: p.id, pergunta: p.texto, resposta: normalizarResposta(p, bruta) });
+  }
+  if (faltam.length) throw new Error(`Responda as perguntas obrigatórias:\n• ${faltam.join('\n• ')}`);
   await db.runAsync(
-    `UPDATE visitas SET status = 'concluida', checkout_em = ?, resultado = ?, motivo_nao_venda = ?, pedido_id = ?, observacao = ?,
+    `UPDATE visitas SET status = 'concluida', checkout_em = ?, resultado = ?, motivo_nao_venda = ?, pedido_id = ?, observacao = ?, respostas = ?,
                         sincronizada = 0, erro_envio = NULL
       WHERE id = ?`,
-    agora(), c.resultado, motivo, pedidoId, c.observacao?.trim() || null, id,
+    agora(), c.resultado, motivo, pedidoId, c.observacao?.trim() || null, JSON.stringify(respostas), id,
   );
 }
 
@@ -183,4 +209,71 @@ export async function resumoDoDia(db: SQLiteDatabase, data: string, clientesDoRo
     concluidas: visitas.filter((v) => v.status === 'concluida').length,
     vendeu: visitas.filter((v) => v.resultado === 'vendeu').length,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Perguntas da visita (cadastradas no painel; o app baixa e o vendedor responde offline)
+// ---------------------------------------------------------------------------
+
+export interface Pergunta {
+  id: string;
+  texto: string;
+  /** texto | sim_nao | numero | opcoes */
+  tipo: string;
+  /** opcoes separadas por ";" (tipo opcoes) */
+  opcoes: string | null;
+  obrigatoria: number;
+  /** geral | vendedor | escritorio | canal | cliente */
+  escopo: string;
+  escopo_valor: string | null;
+  ordem: number;
+}
+
+export interface RespostaVisita {
+  pergunta_id: string;
+  pergunta: string;
+  resposta: string;
+}
+
+export const listaOpcoes = (p: Pick<Pergunta, 'opcoes'>) => (p.opcoes ?? '').split(';').map((x) => x.trim()).filter(Boolean);
+
+const semZeros = (s: string) => s.trim().replace(/^0+/, '') || '0';
+
+/**
+ * Perguntas que valem para o cliente: gerais, do cliente, do escritorio e do canal dele. As de vendedor o servidor
+ * ja entrega so para o vendedor certo.
+ */
+export async function perguntasDaVisita(db: SQLiteDatabase, cliente: { cod_cliente: string; areas: AreaCliente[] }): Promise<Pergunta[]> {
+  const todas = await db.getAllAsync<Pergunta>('SELECT * FROM visita_perguntas ORDER BY ordem, texto');
+  const escritorios = new Set(cliente.areas.map((a) => a.escritorio?.codigo).filter((x): x is string => !!x));
+  const canais = new Set(cliente.areas.map((a) => a.canal?.codigo).filter((x): x is string => !!x));
+  return todas.filter((p) => {
+    if (p.escopo === 'geral' || p.escopo === 'vendedor') return true;
+    const valores = (p.escopo_valor ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+    if (p.escopo === 'cliente') return valores.some((v) => semZeros(v) === semZeros(cliente.cod_cliente));
+    if (p.escopo === 'escritorio') return valores.some((v) => escritorios.has(v));
+    if (p.escopo === 'canal') return valores.some((v) => canais.has(v));
+    return false;
+  });
+}
+
+/** Confere a resposta ao tipo da pergunta; devolve o texto normalizado ou lanca com a mensagem para o vendedor. */
+function normalizarResposta(p: Pergunta, bruta: string): string {
+  const r = bruta.trim();
+  if (p.tipo === 'numero') {
+    if (!/^-?\d+([.,]\d+)?$/.test(r)) throw new Error(`"${p.texto}": informe um número.`);
+    return r.replace(',', '.');
+  }
+  if (p.tipo === 'sim_nao' && r !== 'Sim' && r !== 'Não') throw new Error(`"${p.texto}": responda Sim ou Não.`);
+  if (p.tipo === 'opcoes' && !listaOpcoes(p).includes(r)) throw new Error(`"${p.texto}": escolha uma das opções.`);
+  return r.slice(0, 500);
+}
+
+export function respostasDaVisita(v: Pick<Visita, 'respostas'>): RespostaVisita[] {
+  try {
+    const r = v.respostas ? JSON.parse(v.respostas) : [];
+    return Array.isArray(r) ? (r as RespostaVisita[]) : [];
+  } catch {
+    return [];
+  }
 }

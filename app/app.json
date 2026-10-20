@@ -28,8 +28,19 @@
       "expo-status-bar",
       "expo-sqlite",
       "expo-font",
-      ["expo-image-picker", { "cameraPermission": "O Sales Pole usa a câmera para fotografar a fachada do cliente na visita." }],
-      ["expo-location", { "locationWhenInUsePermission": "O Sales Pole usa a sua localização para confirmar que você está no cliente ao iniciar a visita." }]
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "O Sales Pole usa a câmera para fotografar a fachada do cliente na visita."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "O Sales Pole usa a sua localização para confirmar que você está no cliente ao iniciar a visita."
+        }
+      ],
+      "expo-sharing"
     ],
     "scheme": "salespole"
   }

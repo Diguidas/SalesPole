@@ -25,7 +25,11 @@ function paraApi(p: PedidoApp) {
     centro_custo: p.centro_custo,
     justificativa: p.justificativa,
     // preco = por CAIXA (vira ZPR2); sem preco o SAP usa a lista
-    itens: p.itens.map((i) => ({ produto: i.produto, unidade: i.unidade, quantidade: i.quantidade, preco: i.preco ?? null })),
+    // preco_tabela e desconto nao vao ao SAP: ficam guardados para o PDF de confirmacao (painel e app)
+    itens: p.itens.map((i) => ({
+      produto: i.produto, unidade: i.unidade, quantidade: i.quantidade, preco: i.preco ?? null,
+      preco_tabela: i.precoTabela ?? null, desconto: i.desconto ?? null,
+    })),
   };
 }
 

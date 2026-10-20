@@ -7,14 +7,14 @@ import { useDados, useTickAoFocar } from '@/db/hooks';
 import { obterOuCriarRascunho } from '@/db/pedidos';
 import { noRoteiroDoDia, obterCliente } from '@/db/queries';
 import {
-  adicionarFoto, concluirVisita, fotosDaVisita, iniciarVisita, MAX_FOTOS_VISITA, pedidoDaVisita, visitaDoClienteNoDia,
+  adicionarFoto, concluirVisita, fotosDaVisita, iniciarVisita, listaOpcoes, MAX_FOTOS_VISITA, pedidoDaVisita, perguntasDaVisita, respostasDaVisita, visitaDoClienteNoDia,
 } from '@/db/visitas';
 import { enviarVisitas } from '@/db/visitasPush';
 import { avaliarCheckin, RAIO_VISITA_M, textoDistancia } from '@/domain/geo';
 import { tirarFoto } from '@/lib/camera';
 import { diaSemanaHoje, hojeISO } from '@/lib/format';
 import { obterPosicao } from '@/lib/localizacao';
-import { Botao, Card, Carregando, Linha, Secao, Segmentado, Selo, Vazio } from '@/ui/components';
+import { Botao, Card, Carregando, Chip, Linha, Secao, Segmentado, Selo, Vazio } from '@/ui/components';
 import { cor, espaco, raio } from '@/ui/theme';
 
 const hora = (iso: string | null) =>
@@ -35,12 +35,14 @@ export default function VisitaTela() {
   const [resultado, setResultado] = useState<'vendeu' | 'nao_vendeu'>('nao_vendeu');
   const [motivo, setMotivo] = useState('');
   const [obs, setObs] = useState('');
+  const [respPerg, setRespPerg] = useState<Record<string, string>>({});
   const [recarga, setRecarga] = useState(0);
   const dep = tick + recarga;
 
   const { dados: cliente, carregando } = useDados((d) => obterCliente(d, cod), [cod]);
   const { dados: visita } = useDados((d) => visitaDoClienteNoDia(d, cod, hoje), [cod, hoje, dep]);
   const { dados: noRoteiro } = useDados((d) => noRoteiroDoDia(d, cod, diaSemanaHoje()), [cod]);
+  const { dados: perguntas } = useDados(async (d) => (cliente ? perguntasDaVisita(d, cliente) : []), [cliente?.cod_cliente, tick]);
   const { dados: fotos } = useDados(async (d) => (visita ? fotosDaVisita(d, visita.id) : []), [visita?.id, dep]);
   const { dados: pedido } = useDados(async (d) => (visita ? pedidoDaVisita(d, visita) : null), [visita?.id, visita?.checkin_em, dep]);
 
@@ -113,7 +115,7 @@ export default function VisitaTela() {
   async function concluir() {
     if (!visita) return;
     try {
-      await concluirVisita(db, visita.id, { resultado, motivo, observacao: obs });
+      await concluirVisita(db, visita.id, { resultado, motivo, observacao: obs, respostas: respPerg });
       recarregar();
       void tentarEnviar();
       router.back();
@@ -210,6 +212,38 @@ export default function VisitaTela() {
               <Botao titulo="Fazer pedido para este cliente" tom="neutro" onPress={fazerPedido} desabilitado={!!cliente.bloqueado} />
             </View>
 
+            {perguntas && perguntas.length > 0 ? (
+              <>
+                <Secao titulo="Perguntas da visita" detalhe={`${perguntas.filter((p) => respPerg[p.id]?.trim()).length} de ${perguntas.length}`} />
+                <Card style={{ gap: espaco.lg }}>
+                  {perguntas.map((p) => (
+                    <View key={p.id} style={{ gap: 6 }}>
+                      <Text style={estilos.titulo}>{p.texto}{p.obrigatoria ? <Text style={{ color: cor.erro }}> *</Text> : null}</Text>
+                      {p.tipo === 'sim_nao' || p.tipo === 'opcoes' ? (
+                        <View style={estilos.selos}>
+                          {(p.tipo === 'sim_nao' ? ['Sim', 'Não'] : listaOpcoes(p)).map((o) => (
+                            <Chip key={o} texto={o} ativo={respPerg[p.id] === o} onPress={() => setRespPerg({ ...respPerg, [p.id]: respPerg[p.id] === o ? '' : o })} />
+                          ))}
+                        </View>
+                      ) : (
+                        <TextInput
+                          style={[estilos.campo, p.tipo === 'texto' ? { minHeight: 48, textAlignVertical: 'top' } : undefined]}
+                          value={respPerg[p.id] ?? ''}
+                          onChangeText={(t) => setRespPerg({ ...respPerg, [p.id]: t })}
+                          keyboardType={p.tipo === 'numero' ? 'decimal-pad' : 'default'}
+                          placeholder={p.obrigatoria ? 'Obrigatória' : 'Opcional'}
+                          placeholderTextColor={cor.textoSuave}
+                          multiline={p.tipo === 'texto'}
+                          maxLength={500}
+                        />
+                      )}
+                    </View>
+                  ))}
+                  {perguntas.some((p) => p.obrigatoria) ? <Text style={estilos.suave}>* obrigatória para concluir a visita.</Text> : null}
+                </Card>
+              </>
+            ) : null}
+
             <Secao titulo="Concluir a visita" />
             <Card style={{ gap: espaco.md }}>
               <Segmentado
@@ -261,6 +295,7 @@ export default function VisitaTela() {
             <Linha rotulo="Check-out" valor={hora(visita.checkout_em)} />
             {visita.resultado === 'nao_vendeu' ? <Linha rotulo="Motivo" valor={visita.motivo_nao_venda} /> : null}
             {visita.observacao ? <Linha rotulo="Observação" valor={visita.observacao} /> : null}
+            {respostasDaVisita(visita).map((r) => <Linha key={r.pergunta_id} rotulo={r.pergunta} valor={r.resposta} />)}
             <Linha
               rotulo="Validação"
               valor={visita.validacao === 'validada' ? 'Validada' : visita.validacao === 'recusada' ? `Recusada${visita.validacao_obs ? `: ${visita.validacao_obs}` : ''}` : 'Aguardando validação'}

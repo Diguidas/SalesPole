@@ -139,6 +139,9 @@ export const TABELAS_DE_DADOS = [
   'destaques',
   'incentivos',
   'feriados',
+  'visita_perguntas',
+  'avisos',
+  'avisos_lidos',
   'visita_fotos',
   'visitas',
   'historico_mes',
@@ -273,6 +276,32 @@ export async function migrar(db: SQLiteDatabase): Promise<void> {
         );
       `);
       await db.execAsync('PRAGMA user_version = 10');
+    });
+  }
+  if (v < 11) {
+    // perguntas da visita (cadastradas no painel) e as respostas do vendedor (JSON na propria visita)
+    await db.withTransactionAsync(async () => {
+      await db.execAsync(`
+        CREATE TABLE IF NOT EXISTS visita_perguntas (
+          id TEXT PRIMARY KEY, texto TEXT NOT NULL, tipo TEXT NOT NULL, opcoes TEXT, obrigatoria INTEGER NOT NULL DEFAULT 0,
+          escopo TEXT NOT NULL DEFAULT 'geral', escopo_valor TEXT, ordem INTEGER NOT NULL DEFAULT 0
+        );
+      `);
+      await db.execAsync('ALTER TABLE visitas ADD COLUMN respostas TEXT');
+      await db.execAsync('PRAGMA user_version = 11');
+    });
+  }
+  if (v < 12) {
+    // avisos do painel (pop-up ao abrir o app) e quais o vendedor ja leu neste aparelho
+    await db.withTransactionAsync(async () => {
+      await db.execAsync(`
+        CREATE TABLE IF NOT EXISTS avisos (
+          id TEXT PRIMARY KEY, titulo TEXT NOT NULL, mensagem TEXT NOT NULL, nivel TEXT NOT NULL DEFAULT 'info',
+          escopo TEXT NOT NULL DEFAULT 'geral', escopo_valor TEXT, vigencia_ini TEXT, vigencia_fim TEXT, atualizado_em TEXT
+        );
+        CREATE TABLE IF NOT EXISTS avisos_lidos (id TEXT PRIMARY KEY, atualizado_em TEXT, lido_em TEXT NOT NULL);
+      `);
+      await db.execAsync('PRAGMA user_version = 12');
     });
   }
 }

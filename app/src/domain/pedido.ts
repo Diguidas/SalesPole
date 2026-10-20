@@ -16,6 +16,8 @@ export interface ItemPedido {
   desconto?: number | null;
   /** parte do desconto dada pelo vendedor (o resto vem do incentivo por quantidade); ver incentivo.ts */
   descontoManual?: number | null;
+  /** preco de TABELA por caixa fixado no envio (so para o PDF/consulta; o SAP recebe apenas `preco`) */
+  precoTabela?: string | null;
   /** teto do desconto TOTAL deste item (lista + incentivo + extra) para a quantidade atual */
   descontoLiberado?: number | null;
 }

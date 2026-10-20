@@ -2,7 +2,7 @@ import type { SQLiteDatabase } from 'expo-sqlite';
 import { api } from '@/lib/api';
 import { apagarFoto, lerFoto } from '@/lib/camera';
 import { supabase } from '@/lib/supabase';
-import type { Visita, VisitaFoto } from './visitas';
+import { respostasDaVisita, type Visita, type VisitaFoto } from './visitas';
 
 const BUCKET_FOTOS = 'visitas-fotos';
 
@@ -36,7 +36,7 @@ function paraApi(v: Visita) {
     checkin_precisao_m: v.checkin_precisao_m,
     gps_falso: !!v.gps_falso,
     ...(v.status === 'concluida'
-      ? { checkout_em: v.checkout_em, resultado: v.resultado, motivo_nao_venda: v.motivo_nao_venda, pedido_id: v.pedido_id }
+      ? { checkout_em: v.checkout_em, resultado: v.resultado, motivo_nao_venda: v.motivo_nao_venda, pedido_id: v.pedido_id, respostas: respostasDaVisita(v) }
       : {}),
     observacao: v.observacao,
   };

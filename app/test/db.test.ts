@@ -1,11 +1,15 @@
 // Testes da camada de dados do app contra um SQLite REAL (node:sqlite). Rodar: npm run test:db
 import assert from 'node:assert/strict';
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { before, describe, test } from 'node:test';
 import type { SQLiteDatabase } from 'expo-sqlite';
 import { colocarNoCarrinho } from '@/db/carrinho';
 import { feriadosDoCliente } from '@/db/feriados';
 import { buscarProdutos, infoProdutos, rotulo } from '@/db/catalogo';
+import { avisosNaoLidos, marcarAvisoLido } from '@/db/avisos';
+import { htmlPedido, montarDocPedido, type EntradaPdf } from '@/domain/pedidoPdf';
 import { carregarIncentivos } from '@/db/incentivos';
 import { fichaDoProduto, listarDestaques, ultimosPedidosDoCliente } from '@/db/produto';
 import { incentivoAplicavel } from '@/domain/incentivo';
@@ -20,7 +24,7 @@ import {
 } from '@/db/queries';
 import { migrar } from '@/db/schema';
 import {
-  adicionarFoto, concluirVisita, fotosDaVisita, iniciarVisita, MAX_FOTOS_VISITA, pedidoDaVisita, resumoDoDia, visitaDoClienteNoDia, visitasDoDia,
+  adicionarFoto, concluirVisita, fotosDaVisita, iniciarVisita, MAX_FOTOS_VISITA, pedidoDaVisita, perguntasDaVisita, respostasDaVisita, resumoDoDia, visitaDoClienteNoDia, visitasDoDia,
 } from '@/db/visitas';
 import { aplicarPull, buscarOrdemNoSap, lerMeta, limparBancoLocal, type PullResposta } from '@/db/sync';
 
@@ -150,7 +154,7 @@ describe('camada de dados do app', () => {
   test('migracao cria o schema e e idempotente', async () => {
     await migrar(db); // 2a vez nao pode falhar nem apagar nada
     const v = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
-    assert.equal(v?.user_version, 10);
+    assert.equal(v?.user_version, 12);
     assert.equal((await db.getAllAsync('SELECT 1 FROM clientes')).length, 3);
   });
 
@@ -425,8 +429,9 @@ describe('camada de dados do app', () => {
       assert.equal(corpo.id, pend.id);
       assert.equal(corpo.criado_no_app_em, pend.criado_em);
       // com preco (por caixa, vira ZPR2) quando o item tem; sem preco vai null (o SAP aplica a lista)
-      assert.deepEqual(corpo.itens[0], { produto: 'P1', unidade: 'CX', quantidade: '12', preco: '40.00' });
-      assert.deepEqual(corpo.itens[1], { produto: 'P4', unidade: 'CX', quantidade: '2.5', preco: null });
+      // preco_tabela e desconto vao so para o PDF de confirmacao (o servidor nao os manda ao SAP)
+      assert.deepEqual(corpo.itens[0], { produto: 'P1', unidade: 'CX', quantidade: '12', preco: '40.00', preco_tabela: null, desconto: null });
+      assert.deepEqual(corpo.itens[1], { produto: 'P4', unidade: 'CX', quantidade: '2.5', preco: null, preco_tabela: null, desconto: null });
 
       (globalThis as any).__apiStub = async (_c: string, o: any) => ({
         resultados: o.body.pedidos.map((p: any) => ({
@@ -582,7 +587,7 @@ describe('bonificacao, incentivos e cadastros do painel', () => {
 
   test('migracao cria as tabelas dos cadastros do painel e as colunas da bonificacao', async () => {
     const v = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
-    assert.equal(v?.user_version, 10);
+    assert.equal(v?.user_version, 12);
     for (const t of ['bonificacao_tipos', 'centros_custo', 'destaques', 'incentivos']) {
       assert.ok((await db.getAllAsync(`SELECT 1 FROM ${t}`)).length >= 0, t);
     }
@@ -906,6 +911,30 @@ describe('roteiro de visita', () => {
     await assert.rejects(() => concluirVisita(db, v.id, { resultado: 'nao_vendeu', motivo: 'outro' }), /já foi concluída/);
   });
 
+  test('perguntas da visita: valem por escopo, as obrigatorias bloqueiam a conclusao e as respostas ficam gravadas', async () => {
+    await db.execAsync(`
+      INSERT INTO visita_perguntas (id, texto, tipo, opcoes, obrigatoria, escopo, escopo_valor, ordem) VALUES
+        ('p1', 'Produto exposto?', 'sim_nao', NULL, 1, 'geral', NULL, 1),
+        ('p2', 'Estado da loja', 'opcoes', 'Ótimo; Bom; Ruim', 0, 'geral', NULL, 2),
+        ('p3', 'Só do cliente C9', 'texto', NULL, 1, 'cliente', 'C9,C10', 3),
+        ('p4', 'Só do canal 99', 'texto', NULL, 1, 'canal', '99', 4),
+        ('p5', 'Preço do concorrente', 'numero', NULL, 0, 'geral', NULL, 5);
+    `);
+    const cli = { cod_cliente: 'C9', areas: [] };
+    assert.deepEqual((await perguntasDaVisita(db, cli)).map((p) => p.id), ['p1', 'p2', 'p3', 'p5']);
+    assert.deepEqual((await perguntasDaVisita(db, { cod_cliente: 'C1', areas: [{ canal: { codigo: '99' } } as never] })).map((p) => p.id), ['p1', 'p2', 'p4', 'p5']);
+
+    await iniciarVisita(db, { cod_cliente: 'C9', data_visita: '2020-01-02', posicao: NO_CLIENTE, cliente: { lat: null, lng: null }, fachada: FOTO });
+    const v = (await visitaDoClienteNoDia(db, 'C9', '2020-01-02'))!;
+    await assert.rejects(() => concluirVisita(db, v.id, { resultado: 'nao_vendeu', motivo: 'sem estoque' }), /Produto exposto\?/);
+    await assert.rejects(() => concluirVisita(db, v.id, { resultado: 'nao_vendeu', motivo: 'sem estoque', respostas: { p1: 'Talvez', p3: 'x' } }), /Sim ou Não/);
+    await assert.rejects(() => concluirVisita(db, v.id, { resultado: 'nao_vendeu', motivo: 'sem estoque', respostas: { p1: 'Sim', p3: 'x', p5: 'caro' } }), /número/);
+    await concluirVisita(db, v.id, { resultado: 'nao_vendeu', motivo: 'sem estoque', respostas: { p1: 'Sim', p2: 'Bom', p3: 'ok', p5: '12,5' } });
+    const salvas = respostasDaVisita((await visitaDoClienteNoDia(db, 'C9', '2020-01-02'))!);
+    assert.deepEqual(salvas.map((r) => [r.pergunta_id, r.resposta]), [['p1', 'Sim'], ['p2', 'Bom'], ['p3', 'ok'], ['p5', '12.5']]);
+    await db.execAsync('DELETE FROM visita_perguntas');
+  });
+
   test('concluir "vendeu" exige um pedido de VENDA feito depois do check-in (bonificacao e rascunho nao contam)', async () => {
     const v = (await visitaDoClienteNoDia(db, 'C1', DIA))!;
     await assert.rejects(() => concluirVisita(db, v.id, { resultado: 'vendeu' }), /faça o pedido/);
@@ -1104,5 +1133,109 @@ describe('busca de uma ordem avulsa no SAP', () => {
     (globalThis as any).__apiStub = async () => { throw new Error('Ordem ainda nao encontrada no SAP'); };
     await assert.rejects(buscarOrdemNoSap(db, '5800002'), /ainda nao encontrada/);
     assert.equal((await db.getAllAsync("SELECT 1 FROM pedidos_sap WHERE ordem = '5800002'")).length, 0);
+  });
+});
+
+describe('avisos do painel', () => {
+  let db: SQLiteDatabase;
+
+  before(async () => {
+    db = abrirBanco();
+    await migrar(db);
+    await db.execAsync(`
+      INSERT INTO clientes (cod_cliente, nome_fantasia, areas) VALUES
+        ('A1', 'Loja', '[{"escritorio":{"codigo":"E10"},"canal":{"codigo":"02"}}]');
+      INSERT INTO avisos (id, titulo, mensagem, nivel, escopo, escopo_valor, vigencia_ini, vigencia_fim, atualizado_em) VALUES
+        ('a1', 'Geral', 'para todos', 'info', 'geral', NULL, NULL, NULL, 't1'),
+        ('a2', 'Urgente', 'canal certo', 'urgente', 'canal', '99,02', NULL, NULL, 't1'),
+        ('a3', 'Outro canal', 'nao vale', 'info', 'canal', '77', NULL, NULL, 't1'),
+        ('a4', 'Escritorio', 'escritorio certo', 'importante', 'escritorio', 'E10', NULL, NULL, 't1'),
+        ('a5', 'Vencido', 'expirou', 'info', 'geral', NULL, NULL, '2026-10-01', 't1'),
+        ('a6', 'Futuro', 'ainda nao', 'info', 'geral', NULL, '2026-11-01', NULL, 't1');
+    `);
+  });
+
+  test('so os vigentes que valem para o escritorio/canal dos clientes, do mais urgente ao menos', async () => {
+    const lista = await avisosNaoLidos(db, '2026-10-19');
+    assert.deepEqual(lista.map((a) => a.id), ['a2', 'a4', 'a1']);
+  });
+
+  test('lido some; aviso editado no painel (atualizado_em novo) volta a aparecer', async () => {
+    const [primeiro] = await avisosNaoLidos(db, '2026-10-19');
+    await marcarAvisoLido(db, primeiro);
+    assert.deepEqual((await avisosNaoLidos(db, '2026-10-19')).map((a) => a.id), ['a4', 'a1']);
+    await db.runAsync("UPDATE avisos SET atualizado_em = 't2' WHERE id = 'a2'");
+    assert.deepEqual((await avisosNaoLidos(db, '2026-10-19')).map((a) => a.id), ['a2', 'a4', 'a1']);
+  });
+});
+
+describe('PDF de confirmacao do pedido', () => {
+  const prod = (descricao: string, tipo_material: string) => ({
+    descricao, tipo_material, unidade_venda: 'KI', unidade_venda_texto: 'CX', unidade_base: 'KG', conversoes: [{ unidade: 'KI', texto: 'CX', fator: 7 }], pesoliquido: '1.000',
+  });
+  const entrada = (extra: Partial<EntradaPdf['pedido']> = {}): EntradaPdf => ({
+    pedido: {
+      id: '9f3a21bc-0000-4000-8000-000000000000', codigo: '0421173', criado_em: '2026-10-19T19:22:00Z', dt_entrega: '2026-10-21', status: 'enviado', tipo: 'venda',
+      cond_pagamento: null, ordem_compra_cliente: null, endereco_entrega: null, observacao: null,
+      itens: [
+        { produto: 'F1', unidade: 'KI', quantidade: '20', preco: '142.10', preco_tabela: '158.00', desconto: 10 },
+        { produto: 'F2', unidade: 'KI', quantidade: '14', preco: '153.67', preco_tabela: '153.67' },
+        { produto: 'R1', unidade: 'KI', quantidade: '2', preco: null },
+      ],
+      ordens_sap: [{ ordem: '0005997479', tipo_material: 'FERT' }, { ordem: '0005997480', tipo_material: 'HAWA' }],
+      ...extra,
+    },
+    cliente: { cod_cliente: '1058893', nome_fantasia: 'Lagoa', razao_social: 'Super Lagoa', cnpjcpf: '04601165002709', telefone: null, endereco: { cidade: 'Juazeiro', uf: 'CE' }, areas: [{ tipo_material: 'FERT', lista_preco: { descricao: 'Grupo Lagoa' } }], formas_pagamento: [{ codigo: 'B', descricao: 'Boletos' }] },
+    vendedor: { codigo: '100571', nome: 'Jessica', email: null },
+    produtos: { F1: prod('File de Peito', 'FERT'), F2: prod('Coxa', 'FERT'), R1: prod('Pao de Queijo', 'HAWA') },
+    tipo_bonificacao: null, fotos_url: 'https://fotos.exemplo', gerado_em: '2026-10-19T20:00:00Z',
+  });
+
+  test('uma folha por ordem do SAP (industrializados e revenda), com ordem, totais, desconto e peso', () => {
+    const d = montarDocPedido(entrada());
+    assert.deepEqual(d.folhas.map((f) => [f.titulo, f.ordemSap, f.itens.length]), [['Industrializados', '0005997479', 2], ['Revenda', '0005997480', 1]]);
+    const [a, b] = d.folhas[0].itens;
+    assert.deepEqual([a.unidade, a.precoTabela, a.precoFinal, a.total, a.descontoPct, a.pesoKg], ['CX', 158, 142.1, 2842, 10.06, 140]);
+    assert.deepEqual([b.descontoPct, b.total, b.pesoKg], [null, 2151.38, 98]);
+    assert.equal(d.folhas[1].itens[0].total, null); // sem preco: o SAP define
+    assert.equal(d.tabelaPrecos, 'Grupo Lagoa');
+    assert.equal(d.pagamento, 'Boletos');
+    assert.equal(d.cliente.documento, '04.601.165/0027-09');
+    const html = htmlPedido(d);
+    assert.match(html, /Folha 1 de 2/);
+    assert.match(html, /Folha 2 de 2/);
+    assert.match(html, /5997479/);
+    assert.match(html, /5997480/);
+    assert.match(html, /item\(ns\) sem preço/);
+    assert.match(html, /https:\/\/fotos\.exemplo\/F1\.jpg/);
+  });
+
+  test('sem as ordens do SAP (offline): o documento sai mesmo assim e avisa que aguarda o SAP', () => {
+    const d = montarDocPedido(entrada({ status: 'pendente', codigo: null, ordens_sap: [] }));
+    assert.equal(d.folhas.length, 2);
+    assert.equal(d.folhas[0].ordemSap, null);
+    assert.match(d.situacao, /aguardando envio/);
+    const html = htmlPedido(d);
+    assert.match(html, /Aguardando confirmação do SAP/);
+    assert.match(html, /9F3A21BC/); // sem numero definitivo, usa a referencia
+  });
+
+  test('bonificacao: tag e valor so de referencia; texto vindo do cadastro e escapado', () => {
+    const e = entrada({ tipo: 'bonificacao', observacao: '<script>alert(1)</script>' });
+    e.tipo_bonificacao = 'Amostra';
+    const html = htmlPedido(montarDocPedido(e));
+    assert.match(html, /BONIFICAÇÃO/);
+    assert.match(html, /Bonificação — Amostra/);
+    assert.match(html, /Valor de referência/);
+    assert.ok(!html.includes('<script>alert(1)</script>'));
+  });
+
+  test('o app e o painel usam o MESMO arquivo do documento (copia identica)', () => {
+    for (const nome of ['pedidoPdf.ts', 'pdfLogos.ts']) {
+      const app = path.resolve(process.cwd(), 'src/domain', nome);
+      const painel = path.resolve(process.cwd(), '../painel/src', nome);
+      if (!existsSync(painel)) continue;
+      assert.equal(readFileSync(painel, 'utf8'), readFileSync(app, 'utf8'), `painel/src/${nome} diferente de app/src/domain/${nome}: copie o do app`);
+    }
   });
 });
