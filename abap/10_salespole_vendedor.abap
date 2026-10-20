@@ -25,6 +25,8 @@ METHOD salespole_vendedor.
            nome        TYPE string,
            documento   TYPE string,
            rota        TYPE string,
+           escritorio  TYPE string,
+           equipe      TYPE string,
            clientes    TYPE tt_cliente,
          END OF ty_response.
 
@@ -42,9 +44,9 @@ METHOD salespole_vendedor.
 
   DATA(lv_lifnr) = CONV lifnr( |{ lv_cod ALPHA = IN WIDTH = 10 }| ).
 
-  SELECT SINGLE rota
+  SELECT SINGLE rota, vkbur, vkgrp
     FROM zsdt005
-    INTO @DATA(lv_rota)
+    INTO @DATA(ls_z5)
     WHERE lifnr = @lv_lifnr
       AND datbi >= @sy-datum.
 
@@ -52,6 +54,8 @@ METHOD salespole_vendedor.
     send_error( iv_status = 404 iv_msg = 'Vendedor sem rota vigente' ).
     RETURN.
   ENDIF.
+
+  DATA(lv_rota) = ls_z5-rota.
 
   SELECT SINGLE name1, stcd1, stcd2
     FROM lfa1
@@ -62,6 +66,8 @@ METHOD salespole_vendedor.
   ls_response-nome        = ls_lfa1-name1.
   ls_response-documento   = COND #( WHEN ls_lfa1-stcd1 IS NOT INITIAL THEN ls_lfa1-stcd1 ELSE ls_lfa1-stcd2 ).
   ls_response-rota        = lv_rota.
+  ls_response-escritorio  = ls_z5-vkbur.
+  ls_response-equipe      = ls_z5-vkgrp.
 
   " z6~wotnr = dia da semana (1 = segunda)
   SELECT z6~kunnr,

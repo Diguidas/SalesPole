@@ -2,7 +2,7 @@
 *" ZCL_INTEGRACAO_POLE_TECH  -  integracao Sales Pole (forca de vendas) x SAP ECC
 *"
 *" Todos os recursos ficam em /poletech/salespole/{recurso}
-*"   GET : vendedor, clientes, pedidos, itens, titulos, produtos,
+*"   GET : vendedor, vendedores, supervisores, clientes, pedidos, itens, titulos, produtos,
 *"         catalogo_preco, precos, estoque, remessas
 *"   POST: criar_pedido, cancelar_pedido
 *"
@@ -26,6 +26,7 @@ CLASS zcl_integracao_pole_tech DEFINITION
 
     METHODS salespole_vendedor.
     METHODS salespole_vendedores.
+    METHODS salespole_supervisores.
     METHODS salespole_clientes.
     METHODS salespole_pedidos.
     METHODS salespole_itens.
@@ -219,6 +220,7 @@ METHOD if_rest_resource~get.
       CASE lv_recurso.
         WHEN 'vendedor'.        salespole_vendedor( ).
         WHEN 'vendedores'.      salespole_vendedores( ).
+        WHEN 'supervisores'.    salespole_supervisores( ).
         WHEN 'clientes'.        salespole_clientes( ).
         WHEN 'pedidos'.         salespole_pedidos( ).
         WHEN 'itens'.           salespole_itens( ).
@@ -620,7 +622,7 @@ ENDMETHOD.
 METHOD salespole_vendedores.
 
   " GET /salespole/vendedores
-  " Todos os vendedores com rota vigente (codigo, nome, documento e rota).
+  " Todos os vendedores com rota vigente (codigo, nome, documento, rota, escritorio e equipe de vendas).
   " Usado pelo painel gerencial para escolher quais vendedores entram nos indicadores,
   " mesmo sem usar o app. Nao recebe parametros.
 
@@ -629,6 +631,8 @@ METHOD salespole_vendedores.
            nome        TYPE string,
            documento   TYPE string,
            rota        TYPE string,
+           escritorio  TYPE string,
+           equipe      TYPE string,
          END OF ty_vend,
          tt_vend TYPE STANDARD TABLE OF ty_vend WITH EMPTY KEY,
 
@@ -640,6 +644,8 @@ METHOD salespole_vendedores.
 
   SELECT z5~lifnr,
          z5~rota,
+         z5~vkbur,
+         z5~vkgrp,
          l~name1,
          l~stcd1,
          l~stcd2
@@ -657,8 +663,69 @@ METHOD salespole_vendedores.
     APPEND VALUE #( codvendedor = |{ ls_row-lifnr ALPHA = OUT }|
                     nome        = ls_row-name1
                     documento   = COND #( WHEN ls_row-stcd1 IS NOT INITIAL THEN ls_row-stcd1 ELSE ls_row-stcd2 )
-                    rota        = ls_row-rota )
+                    rota        = ls_row-rota
+                    escritorio  = ls_row-vkbur
+                    equipe      = ls_row-vkgrp )
       TO ls_response-vendedores.
+  ENDLOOP.
+
+  send_json( is_data = ls_response ).
+
+ENDMETHOD.
+
+METHOD salespole_supervisores.
+
+  " GET /salespole/supervisores
+  " Supervisores vigentes (ZSDT087): supervisor x escritorio + equipe de vendas, com o gerente do supervisor.
+  " O vendedor chega ao supervisor pelo escritorio e equipe que vem em /salespole/vendedores
+  " (ZSDT005-VKBUR/VKGRP). Nao recebe parametros.
+
+  TYPES: BEGIN OF ty_sup,
+           codsupervisor TYPE string,
+           nome          TYPE string,
+           codgerente    TYPE string,
+           gerente_nome  TYPE string,
+           escritorio    TYPE string,
+           equipe        TYPE string,
+           dt_inicio     TYPE string,
+           dt_fim        TYPE string,
+         END OF ty_sup,
+         tt_sup TYPE STANDARD TABLE OF ty_sup WITH EMPTY KEY,
+
+         BEGIN OF ty_response,
+           supervisores TYPE tt_sup,
+         END OF ty_response.
+
+  DATA ls_response TYPE ty_response.
+
+  " vigente hoje; DATAF vazio = sem fim
+  SELECT z~lifnr,
+         z~datai,
+         z~dataf,
+         z~vkgrp,
+         z~vkbur,
+         z~gerente,
+         z~gerente_nome,
+         l~name1
+    FROM zsdt087 AS z
+    LEFT OUTER JOIN lfa1 AS l
+      ON l~lifnr = z~lifnr
+    INTO TABLE @DATA(lt_rows)
+    WHERE z~datai <= @sy-datum
+      AND ( z~dataf >= @sy-datum OR z~dataf = '00000000' ).
+
+  SORT lt_rows BY lifnr vkbur vkgrp datai DESCENDING.
+
+  LOOP AT lt_rows INTO DATA(ls_row).
+    APPEND VALUE #( codsupervisor = |{ ls_row-lifnr ALPHA = OUT }|
+                    nome          = ls_row-name1
+                    codgerente    = |{ ls_row-gerente ALPHA = OUT }|
+                    gerente_nome  = ls_row-gerente_nome
+                    escritorio    = ls_row-vkbur
+                    equipe        = ls_row-vkgrp
+                    dt_inicio     = |{ ls_row-datai DATE = ISO }|
+                    dt_fim        = COND #( WHEN ls_row-dataf IS INITIAL THEN `` ELSE |{ ls_row-dataf DATE = ISO }| ) )
+      TO ls_response-supervisores.
   ENDLOOP.
 
   send_json( is_data = ls_response ).
@@ -692,6 +759,8 @@ METHOD salespole_vendedor.
            nome        TYPE string,
            documento   TYPE string,
            rota        TYPE string,
+           escritorio  TYPE string,
+           equipe      TYPE string,
            clientes    TYPE tt_cliente,
          END OF ty_response.
 
@@ -709,9 +778,9 @@ METHOD salespole_vendedor.
 
   DATA(lv_lifnr) = CONV lifnr( |{ lv_cod ALPHA = IN WIDTH = 10 }| ).
 
-  SELECT SINGLE rota
+  SELECT SINGLE rota, vkbur, vkgrp
     FROM zsdt005
-    INTO @DATA(lv_rota)
+    INTO @DATA(ls_z5)
     WHERE lifnr = @lv_lifnr
       AND datbi >= @sy-datum.
 
@@ -719,6 +788,8 @@ METHOD salespole_vendedor.
     send_error( iv_status = 404 iv_msg = 'Vendedor sem rota vigente' ).
     RETURN.
   ENDIF.
+
+  DATA(lv_rota) = ls_z5-rota.
 
   SELECT SINGLE name1, stcd1, stcd2
     FROM lfa1
@@ -729,6 +800,8 @@ METHOD salespole_vendedor.
   ls_response-nome        = ls_lfa1-name1.
   ls_response-documento   = COND #( WHEN ls_lfa1-stcd1 IS NOT INITIAL THEN ls_lfa1-stcd1 ELSE ls_lfa1-stcd2 ).
   ls_response-rota        = lv_rota.
+  ls_response-escritorio  = ls_z5-vkbur.
+  ls_response-equipe      = ls_z5-vkgrp.
 
   " z6~wotnr = dia da semana (1 = segunda)
   SELECT z6~kunnr,

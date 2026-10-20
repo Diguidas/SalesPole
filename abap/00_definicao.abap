@@ -26,6 +26,7 @@ CLASS zcl_integracao_pole_tech DEFINITION
 
     METHODS salespole_vendedor.
     METHODS salespole_vendedores.
+    METHODS salespole_supervisores.
     METHODS salespole_clientes.
     METHODS salespole_pedidos.
     METHODS salespole_itens.

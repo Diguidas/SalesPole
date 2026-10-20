@@ -41,6 +41,7 @@ METHOD if_rest_resource~get.
       CASE lv_recurso.
         WHEN 'vendedor'.        salespole_vendedor( ).
         WHEN 'vendedores'.      salespole_vendedores( ).
+        WHEN 'supervisores'.    salespole_supervisores( ).
         WHEN 'clientes'.        salespole_clientes( ).
         WHEN 'pedidos'.         salespole_pedidos( ).
         WHEN 'itens'.           salespole_itens( ).

@@ -1,7 +1,7 @@
 METHOD salespole_vendedores.
 
   " GET /salespole/vendedores
-  " Todos os vendedores com rota vigente (codigo, nome, documento e rota).
+  " Todos os vendedores com rota vigente (codigo, nome, documento, rota, escritorio e equipe de vendas).
   " Usado pelo painel gerencial para escolher quais vendedores entram nos indicadores,
   " mesmo sem usar o app. Nao recebe parametros.
 
@@ -10,6 +10,8 @@ METHOD salespole_vendedores.
            nome        TYPE string,
            documento   TYPE string,
            rota        TYPE string,
+           escritorio  TYPE string,
+           equipe      TYPE string,
          END OF ty_vend,
          tt_vend TYPE STANDARD TABLE OF ty_vend WITH EMPTY KEY,
 
@@ -21,6 +23,8 @@ METHOD salespole_vendedores.
 
   SELECT z5~lifnr,
          z5~rota,
+         z5~vkbur,
+         z5~vkgrp,
          l~name1,
          l~stcd1,
          l~stcd2
@@ -38,7 +42,9 @@ METHOD salespole_vendedores.
     APPEND VALUE #( codvendedor = |{ ls_row-lifnr ALPHA = OUT }|
                     nome        = ls_row-name1
                     documento   = COND #( WHEN ls_row-stcd1 IS NOT INITIAL THEN ls_row-stcd1 ELSE ls_row-stcd2 )
-                    rota        = ls_row-rota )
+                    rota        = ls_row-rota
+                    escritorio  = ls_row-vkbur
+                    equipe      = ls_row-vkgrp )
       TO ls_response-vendedores.
   ENDLOOP.
 
