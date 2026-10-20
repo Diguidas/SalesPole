@@ -5,6 +5,9 @@ export interface ItemEntrada {
   unidade: string;
   quantidade: string;
   preco: string | null;
+  /** so para o PDF de confirmacao: preco de tabela por caixa e desconto (%) no momento do envio; nao vai ao SAP */
+  preco_tabela?: string | null;
+  desconto?: number | null;
 }
 
 export interface PedidoEntrada {
@@ -102,7 +105,11 @@ export function validarPedido(raw: unknown): ResultadoValidacao {
     if (!quantidade) erros.push(`itens[${i}].quantidade deve ser > 0 (ate 3 casas)`);
     if (x.preco !== undefined && x.preco !== null && x.preco !== '' && !preco) erros.push(`itens[${i}].preco invalido`);
 
-    if (produto && unidade && quantidade) itens.push({ produto, unidade, quantidade, preco });
+    const precoTabela = x.preco_tabela === undefined || x.preco_tabela === null || x.preco_tabela === '' ? null : decimal(x.preco_tabela, 4, 10_000_000);
+    const descNum = Number(x.desconto);
+    const desconto = x.desconto === undefined || x.desconto === null || !Number.isFinite(descNum) || descNum <= 0 || descNum > 100 ? null : Math.round(descNum * 100) / 100;
+
+    if (produto && unidade && quantidade) itens.push({ produto, unidade, quantidade, preco, preco_tabela: precoTabela, desconto });
   });
 
   if (erros.length) return { ok: false, id: UUID.test(id) ? id : null, erros };

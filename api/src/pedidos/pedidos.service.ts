@@ -28,7 +28,7 @@ export interface PedidoRow {
   centro_custo: string | null;
   justificativa: string | null;
   motivo_rejeicao: string | null;
-  itens: Array<{ produto: string; unidade: string; quantidade: string; preco: string | null }>;
+  itens: Array<{ produto: string; unidade: string; quantidade: string; preco: string | null; preco_tabela?: string | null; desconto?: number | null }>;
   itens_hash: string;
   status: string;
   ordens_sap: OrdemSap[];

@@ -39,6 +39,14 @@ export interface VisitaEntrada {
   /** so quando a visita foi concluida no aparelho */
   checkout: { em: string; resultado: 'vendeu' | 'nao_vendeu'; motivo: string | null; pedidoId: string | null } | null;
   observacao: string | null;
+  /** respostas das perguntas do painel (so quando concluida); o texto da pergunta fica gravado junto */
+  respostas: RespostaVisita[];
+}
+
+export interface RespostaVisita {
+  pergunta_id: string;
+  pergunta: string;
+  resposta: string;
 }
 
 export type ResultadoValidacaoVisita = { ok: true; visita: VisitaEntrada } | { ok: false; id: string | null; erros: string[] };
@@ -123,6 +131,7 @@ export function validarVisita(raw: unknown): ResultadoValidacaoVisita {
       gpsFalso: r.gps_falso === true || r.gps_falso === 'true' || r.gps_falso === 1,
       checkout,
       observacao: texto(r.observacao, 500),
+      respostas: validarRespostas(r.respostas),
     },
   };
 }
@@ -165,4 +174,21 @@ export function validarFoto(raw: unknown): ResultadoValidacaoFoto {
     ok: true,
     foto: { id, visitaId, tipo: tipo!, tiradaEm: new Date(tirada).toISOString(), lat, lng, tamanhoBytes: tamanho === null ? null : Math.round(tamanho) },
   };
+}
+
+/** Respostas das perguntas da visita: ignora o que nao tem forma de resposta; no maximo 50, cada uma curta. */
+export function validarRespostas(raw: unknown): RespostaVisita[] {
+  if (!Array.isArray(raw)) return [];
+  const vistas = new Set<string>();
+  const saida: RespostaVisita[] = [];
+  for (const x of raw.slice(0, 50)) {
+    const r = (x && typeof x === 'object' ? x : {}) as Record<string, unknown>;
+    const id = typeof r.pergunta_id === 'string' ? r.pergunta_id.trim().toLowerCase() : '';
+    const pergunta = texto(r.pergunta, 200);
+    const resposta = texto(r.resposta, 500);
+    if (!UUID.test(id) || vistas.has(id) || !pergunta || !resposta) continue;
+    vistas.add(id);
+    saida.push({ pergunta_id: id, pergunta, resposta });
+  }
+  return saida;
 }

@@ -45,6 +45,8 @@ const data = (b: Linha, c: string, rotulo: string, obrigatorio = false): string 
 
 const flag = (b: Linha, c: string, padrao = false) => (b[c] == null ? padrao : b[c] === true || b[c] === 'true');
 
+const TIPOS_PERGUNTA = ['texto', 'sim_nao', 'numero', 'opcoes'];
+const ESCOPOS_PERGUNTA = ['geral', 'vendedor', 'escritorio', 'canal', 'cliente'];
 const ESCOPOS = ['geral', 'produto', 'cliente', 'vendedor', 'canal', 'escritorio'];
 
 export const CADASTROS: Record<string, Cadastro> = {
@@ -97,6 +99,67 @@ export const CADASTROS: Record<string, Cadastro> = {
         descricao: texto(b, 'descricao', 'Descricao', { max: 80, obrigatorio: true }),
         uf,
         cidade,
+        ativo: flag(b, 'ativo', true),
+      };
+    },
+  },
+  avisos: {
+    tabela: 'avisos',
+    chave: 'id',
+    ordem: [['updated_at', false]],
+    validar: (b) => {
+      const nivel = texto(b, 'nivel', 'Nivel', { max: 20 }) ?? 'info';
+      if (!['info', 'importante', 'urgente'].includes(nivel)) throw erro('Nivel invalido');
+      const escopo = texto(b, 'escopo', 'Para quem', { max: 20 }) ?? 'geral';
+      if (!['geral', 'vendedor', 'escritorio', 'canal'].includes(escopo)) throw erro('Escopo invalido');
+      const escopoValor = texto(b, 'escopo_valor', 'Codigos', { max: 400 });
+      if (escopo !== 'geral' && !escopoValor) throw erro('Informe o(s) codigo(s) do vendedor, escritorio ou canal');
+      const ini = data(b, 'vigencia_ini', 'Inicio da vigencia');
+      const fim = data(b, 'vigencia_fim', 'Fim da vigencia');
+      if (ini && fim && fim < ini) throw erro('O fim da vigencia e anterior ao inicio');
+      return {
+        titulo: texto(b, 'titulo', 'Titulo', { max: 80, obrigatorio: true }),
+        mensagem: texto(b, 'mensagem', 'Mensagem', { max: 1000, obrigatorio: true }),
+        nivel,
+        escopo,
+        escopo_valor: escopo === 'geral' || !escopoValor
+          ? null
+          : [...new Set(escopoValor.split(/[,;\s]+/).filter(Boolean).map((x) => (escopo === 'vendedor' ? x.replace(/^0+/, '') || '0' : x)))].join(','),
+        vigencia_ini: ini,
+        vigencia_fim: fim,
+        ativo: flag(b, 'ativo', true),
+      };
+    },
+  },
+  'perguntas-visita': {
+    tabela: 'visita_perguntas',
+    chave: 'id',
+    ordem: [['ordem', true], ['updated_at', false]],
+    validar: (b) => {
+      const tipo = texto(b, 'tipo', 'Tipo de resposta', { max: 20 }) ?? 'texto';
+      if (!TIPOS_PERGUNTA.includes(tipo)) throw erro('Tipo de resposta invalido');
+      const escopo = texto(b, 'escopo', 'A quem vale', { max: 20 }) ?? 'geral';
+      if (!ESCOPOS_PERGUNTA.includes(escopo)) throw erro('Escopo invalido');
+      const escopoValor = texto(b, 'escopo_valor', 'Codigos', { max: 400 });
+      if (escopo !== 'geral' && !escopoValor) throw erro('Informe o(s) codigo(s) do vendedor, escritorio, canal ou cliente');
+      let opcoes: string | null = null;
+      if (tipo === 'opcoes') {
+        const lista = [...new Set(String(b.opcoes ?? '').split(';').map((x) => x.trim()).filter(Boolean))];
+        if (lista.length < 2) throw erro('Informe ao menos 2 opcoes separadas por ponto e virgula');
+        if (lista.some((x) => x.length > 60) || lista.length > 15) throw erro('No maximo 15 opcoes de ate 60 caracteres');
+        opcoes = lista.join('; ');
+      }
+      return {
+        texto: texto(b, 'texto', 'Pergunta', { max: 200, obrigatorio: true }),
+        tipo,
+        opcoes,
+        obrigatoria: flag(b, 'obrigatoria'),
+        escopo,
+        // codigos separados por virgula, sem espacos nem repeticao (vendedor sem zeros a esquerda)
+        escopo_valor: escopo === 'geral' || !escopoValor
+          ? null
+          : [...new Set(escopoValor.split(/[,;\s]+/).filter(Boolean).map((x) => (escopo === 'vendedor' || escopo === 'cliente' ? x.replace(/^0+/, '') || '0' : x)))].join(','),
+        ordem: Math.trunc(numero(b, 'ordem', 'Ordem', { min: 0, max: 9999 })),
         ativo: flag(b, 'ativo', true),
       };
     },

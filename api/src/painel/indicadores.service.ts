@@ -106,12 +106,12 @@ export class IndicadoresService {
     const dIni = ini || `${Math.floor(base / 12)}-${String((base % 12) + 1).padStart(2, '0')}-01`;
     if (dIni > dFim) throw new UnprocessableEntityException('O inicio e depois do fim');
 
-    const consulta = async (dim: string): Promise<Grupo[]> => {
-      const { data, error } = await this.sb.rpc('fn_indicadores_vendas', { p_ini: dIni, p_fim: dFim, p_dim: dim });
-      if (error) throw new Error(`fn_indicadores_vendas: ${error.message}`);
-      return ((data ?? []) as Linha[]).map((x) => ({ chave: x.chave ?? '', rotulo: x.rotulo ?? '', valor: Number(x.valor), pedidos: Number(x.pedidos), clientes: Number(x.clientes) }));
-    };
-    const [mes, rota, escritorio, canal] = await Promise.all([consulta('mes'), consulta('rota'), consulta('escritorio'), consulta('canal')]);
+    // as quatro visoes numa so consulta (quatro em paralelo se atrapalhavam e estouravam o timeout do banco)
+    const { data: vendas, error: eVendas } = await this.sb.rpc('fn_indicadores_vendas_todas', { p_ini: dIni, p_fim: dFim });
+    if (eVendas) throw new Error(`fn_indicadores_vendas_todas: ${eVendas.message}`);
+    const consulta = (dim: string): Grupo[] =>
+      ((vendas ?? []) as Linha[]).filter((x) => x.dim === dim).map((x) => ({ chave: x.chave ?? '', rotulo: x.rotulo ?? '', valor: Number(x.valor), pedidos: Number(x.pedidos), clientes: Number(x.clientes) }));
+    const [mes, rota, escritorio, canal] = [consulta('mes'), consulta('rota'), consulta('escritorio'), consulta('canal')];
     const [cart, ven] = await Promise.all([
       this.sb.rpc('fn_indicadores_carteira'),
       this.sb.from('vendedores').select('cod_vendedor, nome, rota').limit(5000),

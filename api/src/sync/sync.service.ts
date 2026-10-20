@@ -250,12 +250,13 @@ export class SyncService {
   // ===================================================================
 
   /** Pedidos dos ultimos 90 dias da carteira + itens dos que ainda precisam. */
-  async sincronizarPedidos(codVendedor: string, rota: string, dias = 90, comItens = true): Promise<number> {
+  async sincronizarPedidos(codVendedor: string, rota: string, dias = 90, comItens = true, deveParar?: () => boolean): Promise<number> {
     const inicio = new Date().toISOString();
     // `dias` (padrao 90) em janelas de 15 (criacao): cada chamada fica bem abaixo do timeout de ~60 s do gateway do SAP.
     // A carga unica do historico (npm run historico:vendedor) usa janela maior.
     const todos: NonNullable<SapPedidosResp['pedidos']> = [];
     for (const [datain, datafim] of janelasDeDias(dias, 15)) {
+      if (deveParar?.()) throw new Error('Cancelada pelo usuario');
       const r = await this.comTentativas(() => this.sap.get<SapPedidosResp>('pedidos', { codvendedor: codVendedor, datain, datafim }));
       todos.push(...(r.pedidos ?? []));
     }

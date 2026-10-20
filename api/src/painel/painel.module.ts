@@ -9,11 +9,13 @@ import { PainelGuard } from './painel.guard';
 import { IndicadoresService } from './indicadores.service';
 import { MonitorService } from './monitor.service';
 import { PainelService } from './painel.service';
+import { SincronizacaoService } from './sincronizacao.service';
 import { UsuariosService } from './usuarios.service';
+import { ProdutosPainelService } from './produtos-painel.service';
 
 @Module({
   imports: [PedidosModule, SyncModule],
   controllers: [PainelController],
-  providers: [PainelService, PainelGuard, UsuariosService, MonitorService, IndicadoresService, PedidoPainelService, CatalogoPainelService, ConsultaPainelService],
+  providers: [PainelService, PainelGuard, UsuariosService, MonitorService, SincronizacaoService, IndicadoresService, PedidoPainelService, CatalogoPainelService, ConsultaPainelService, ProdutosPainelService],
 })
 export class PainelModule {}

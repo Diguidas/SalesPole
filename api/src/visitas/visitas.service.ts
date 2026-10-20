@@ -210,6 +210,7 @@ export class VisitasService {
       motivo_nao_venda: p.checkout?.motivo ?? null,
       pedido_id: p.checkout?.pedidoId ?? null,
       observacao: p.observacao,
+      respostas: p.respostas,
     });
     if (error) throw new Error(`inserir visita: ${error.message}`);
   }
@@ -225,6 +226,7 @@ export class VisitasService {
         motivo_nao_venda: p.checkout.motivo,
         pedido_id: p.checkout.pedidoId,
         observacao: p.observacao,
+        respostas: p.respostas,
       })
       .eq('id', p.id);
     if (error) throw new Error(`concluir visita: ${error.message}`);

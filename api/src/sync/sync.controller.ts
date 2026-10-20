@@ -108,6 +108,32 @@ export class SyncController {
         (r.escopo !== 'vendedor' || r.escopo_valor === v.codVendedor),
     );
 
+    // perguntas da visita: as do vendedor logado e as gerais; escritorio/canal/cliente o app filtra pelo cliente visitado
+    const perguntas = (
+      (await this.sb
+        .from('visita_perguntas')
+        .select('id, texto, tipo, opcoes, obrigatoria, escopo, escopo_valor, ordem')
+        .eq('ativo', true)
+        .order('ordem')
+        .then(this.ok)) as Array<{ escopo: string; escopo_valor: string | null }>
+    ).filter((p) => p.escopo !== 'vendedor' || (p.escopo_valor ?? '').split(',').includes(v.codVendedor));
+
+    // avisos do painel (pop-up no app): vigentes hoje e os do vendedor logado; escritorio/canal o app confere pelos clientes dele
+    const avisos = (
+      (await this.sb
+        .from('avisos')
+        .select('id, titulo, mensagem, nivel, escopo, escopo_valor, vigencia_ini, vigencia_fim, updated_at')
+        .eq('ativo', true)
+        .order('updated_at', { ascending: false })
+        .limit(50)
+        .then(this.ok)) as Array<{ escopo: string; escopo_valor: string | null; vigencia_ini: string | null; vigencia_fim: string | null }>
+    ).filter(
+      (a) =>
+        (!a.vigencia_ini || a.vigencia_ini <= hojeIso) &&
+        (!a.vigencia_fim || a.vigencia_fim >= hojeIso) &&
+        (a.escopo !== 'vendedor' || (a.escopo_valor ?? '').split(',').includes(v.codVendedor)),
+    );
+
     // visitas dos ultimos dias: o app reconhece a visita feita em outro aparelho e mostra a validacao do painel
     const desdeVisitas = new Date(Date.now() - 3 * 86_400_000).toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' });
     const visitas = await this.sb
@@ -136,6 +162,8 @@ export class SyncController {
       incentivos,
       feriados,
       visitas,
+      visita_perguntas: perguntas,
+      avisos,
     };
 
     // conjuntos completos: so quando o sync correspondente rodou depois de `since`

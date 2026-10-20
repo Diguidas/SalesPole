@@ -2,11 +2,13 @@ import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, Req, UseGuard
 import { PainelGuard, Papeis, UsuarioPainel } from './painel.guard';
 import { IndicadoresService } from './indicadores.service';
 import { MonitorService } from './monitor.service';
+import { SincronizacaoService } from './sincronizacao.service';
 import { PainelService } from './painel.service';
 import { CatalogoPainelService } from './catalogo-painel.service';
 import { ConsultaPainelService } from './consulta-painel.service';
 import { PedidoPainelService } from './pedido-painel.service';
 import { UsuariosService } from './usuarios.service';
+import { ProdutosPainelService } from './produtos-painel.service';
 
 /** Endpoints do painel web (React). Login Microsoft via Supabase; permissao pelo papel em usuarios_painel. */
 @Controller('painel')
@@ -16,10 +18,12 @@ export class PainelController {
     private readonly painel: PainelService,
     private readonly usuarios: UsuariosService,
     private readonly monitor: MonitorService,
+    private readonly sincronizacao: SincronizacaoService,
     private readonly indicadores: IndicadoresService,
     private readonly pedidoPainel: PedidoPainelService,
     private readonly catalogo: CatalogoPainelService,
     private readonly consulta: ConsultaPainelService,
+    private readonly produtosPainel: ProdutosPainelService,
   ) {}
 
   @Get('eu')
@@ -67,6 +71,11 @@ export class PainelController {
   @Papeis('aprovador')
   cancelarPedido(@Req() req: { usuarioPainel: UsuarioPainel }, @Param('ordem') ordem: string, @Body() corpo: { motivo?: string }) {
     return this.consulta.cancelarPedido(req.usuarioPainel, ordem, corpo?.motivo);
+  }
+
+  @Get('pedido-app/:id/pdf-dados')
+  pedidoAppPdf(@Param('id') id: string) {
+    return this.consulta.pedidoAppParaPdf(id);
   }
 
   @Get('clientes')
@@ -172,6 +181,31 @@ export class PainelController {
     return this.monitor.reenviarPedido(req.usuarioPainel, id);
   }
 
+  // ---- sincronizacao manual por carteira (Monitor; so admin) ----
+  @Get('monitor/carteiras')
+  @Papeis('admin')
+  carteirasParaSincronizar() {
+    return this.sincronizacao.carteiras();
+  }
+
+  @Get('monitor/sincronizacoes')
+  @Papeis('admin')
+  listarSincronizacoes() {
+    return this.sincronizacao.lista();
+  }
+
+  @Post('monitor/sincronizar')
+  @Papeis('admin')
+  sincronizarCarteiras(@Req() req: { usuarioPainel: UsuarioPainel }, @Body() corpo: { rotas?: unknown; recursos?: unknown }) {
+    return this.sincronizacao.iniciar(req.usuarioPainel.email, corpo?.rotas, corpo?.recursos);
+  }
+
+  @Post('monitor/sincronizacoes/cancelar')
+  @Papeis('admin')
+  cancelarSincronizacoes() {
+    return this.sincronizacao.cancelar();
+  }
+
   // ---- usuarios (so admin): quem entra no painel e quem usa o app ----
   @Get('usuarios/painel')
   @Papeis('admin')
@@ -219,6 +253,32 @@ export class PainelController {
   @Papeis('admin')
   gravarParametro(@Param('chave') chave: string, @Body() corpo: { valor?: unknown }) {
     return this.painel.gravarParametro(chave, corpo?.valor);
+  }
+
+  // ---- produtos e listas de preco (somente leitura) ----
+  @Get('catalogo-produtos')
+  listarProdutos(@Query('busca') busca?: string, @Query('tipo') tipo?: string, @Query('situacao') situacao?: string, @Query('pagina') pagina?: string) {
+    return this.produtosPainel.listarProdutos({ busca, tipo, situacao, pagina });
+  }
+
+  @Get('catalogo-produtos/:cod')
+  produtoDetalhe(@Param('cod') cod: string) {
+    return this.produtosPainel.produto(cod);
+  }
+
+  @Get('listas-preco')
+  listasPreco() {
+    return this.produtosPainel.listasPreco();
+  }
+
+  @Get('listas-preco/:pltyp')
+  listaPreco(@Param('pltyp') pltyp: string) {
+    return this.produtosPainel.listaPreco(pltyp);
+  }
+
+  @Get('listas-preco/:pltyp/clientes')
+  clientesDaLista(@Param('pltyp') pltyp: string, @Query('busca') busca?: string, @Query('pagina') pagina?: string) {
+    return this.produtosPainel.clientesDaLista(pltyp, { busca, pagina });
   }
 
   // ---- cadastros: todos veem, so admin altera ----

@@ -30,7 +30,7 @@ export class PainelService {
     const [cli, ven, pro, tip, cc] = await Promise.all([
       this.sb.from('clientes').select('cod_cliente, nome_fantasia, razao_social').in('cod_cliente', dist((l) => l.cod_cliente)),
       this.sb.from('vendedores').select('cod_vendedor, nome').in('cod_vendedor', dist((l) => l.cod_vendedor)),
-      this.sb.from('produtos').select('cod_produto, descricao').in('cod_produto', prods),
+      this.sb.from('produtos').select('cod_produto, descricao, dados').in('cod_produto', prods),
       this.sb.from('bonificacao_tipos').select('codigo, descricao'),
       this.sb.from('centros_custo').select('codigo, descricao'),
     ]);
@@ -39,6 +39,12 @@ export class PainelService {
     const nCli = new Map((cli.data ?? []).map((c: any) => [c.cod_cliente, c.nome_fantasia || c.razao_social]));
     const nVen = mapa(ven.data, 'cod_vendedor', 'nome');
     const nPro = mapa(pro.data, 'cod_produto', 'descricao');
+    const dadosPro = new Map((pro.data ?? []).map((p: any) => [String(p.cod_produto), p.dados ?? {}]));
+    /** Texto que o vendedor le para a unidade do SAP (KI = CX). */
+    const textoUnidade = (produto: string, unidade: string) => {
+      const d: any = dadosPro.get(produto) ?? {};
+      return d.conversoes?.find((c: any) => c.unidade === unidade)?.texto || (unidade === d.unidade_venda ? d.unidade_venda_texto : null) || unidade;
+    };
     const nTip = mapa(tip.data, 'codigo', 'descricao');
     const nCc = mapa(cc.data, 'codigo', 'descricao');
 
@@ -48,7 +54,7 @@ export class PainelService {
       vendedor: nVen.get(l.cod_vendedor) ?? null,
       tipo_descricao: nTip.get(l.tipo_bonificacao) ?? null,
       centro_descricao: nCc.get(l.centro_custo) ?? null,
-      itens: (l.itens ?? []).map((i: any) => ({ ...i, descricao: nPro.get(String(i.produto)) ?? null })),
+      itens: (l.itens ?? []).map((i: any) => ({ ...i, descricao: nPro.get(String(i.produto)) ?? null, unidade_texto: textoUnidade(String(i.produto), String(i.unidade)) })),
     }));
   }
 
@@ -152,7 +158,7 @@ export class PainelService {
 
     let q = this.sb
       .from('visitas')
-      .select('id, cod_vendedor, cod_cliente, data_visita, status, checkin_em, checkin_recebido_em, checkin_lat, checkin_lng, checkin_precisao_m, checkin_gps_falso, distancia_m, fora_do_raio, sem_referencia, checkout_em, resultado, motivo_nao_venda, observacao, pedido_id, validacao, validada_por, validada_em, validacao_obs')
+      .select('id, cod_vendedor, cod_cliente, data_visita, status, checkin_em, checkin_recebido_em, checkin_lat, checkin_lng, checkin_precisao_m, checkin_gps_falso, distancia_m, fora_do_raio, sem_referencia, checkout_em, resultado, motivo_nao_venda, observacao, respostas, pedido_id, validacao, validada_por, validada_em, validacao_obs')
       .gte('data_visita', ini)
       .order('data_visita', { ascending: false });
     if (f.fim) q = q.lte('data_visita', f.fim);

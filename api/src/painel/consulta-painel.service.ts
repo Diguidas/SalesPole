@@ -93,6 +93,60 @@ export class ConsultaPainelService {
     };
   }
 
+  /**
+   * Dados do PDF de confirmacao de um pedido criado pelo app/painel. O painel monta o documento com o mesmo codigo
+   * do app (pedidoPdf.ts); aqui so entrega o que ele precisa, ja lido do banco.
+   */
+  async pedidoAppParaPdf(idRaw: string) {
+    const id = String(idRaw ?? '').trim();
+    if (!/^[0-9a-f-]{36}$/i.test(id)) throw new UnprocessableEntityException('id invalido');
+    const { data, error } = await this.sb
+      .from('pedidos_app')
+      .select('id, codigo, cod_vendedor, cod_cliente, criado_no_app_em, recebido_em, dt_entrega, status, tipo, tipo_bonificacao, cond_pagamento, ordem_compra_cliente, endereco_entrega, observacao, itens, ordens_sap')
+      .eq('id', id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) throw new NotFoundException('Pedido nao encontrado');
+    const p = data as Linha;
+    const itens = (Array.isArray(p.itens) ? p.itens : []) as Linha[];
+    const codigos = [...new Set(itens.map((i) => String(i.produto)))];
+
+    const [cli, ven, usu, pro, tip] = await Promise.all([
+      this.sb.from('clientes').select('*').eq('cod_cliente', p.cod_cliente).maybeSingle(),
+      this.sb.from('vendedores').select('cod_vendedor, nome').eq('cod_vendedor', p.cod_vendedor).maybeSingle(),
+      this.sb.from('usuarios_vendedor').select('email').eq('cod_vendedor', p.cod_vendedor).eq('ativo', true).limit(1),
+      codigos.length ? this.sb.from('produtos').select('cod_produto, descricao, tipo_material, dados').in('cod_produto', codigos) : Promise.resolve({ data: [], error: null }),
+      p.tipo === 'bonificacao' && p.tipo_bonificacao ? this.sb.from('bonificacao_tipos').select('descricao').eq('codigo', p.tipo_bonificacao).maybeSingle() : Promise.resolve({ data: null, error: null }),
+    ]);
+    for (const r of [cli, ven, usu, pro, tip]) if (r.error) throw r.error;
+
+    const c = cli.data as Linha | null;
+    const produtos: Record<string, Linha> = {};
+    for (const x of (pro.data ?? []) as Linha[]) {
+      const d = (x.dados ?? {}) as Linha;
+      produtos[x.cod_produto] = {
+        descricao: x.descricao, tipo_material: x.tipo_material, unidade_venda: d.unidade_venda ?? null, unidade_venda_texto: d.unidade_venda_texto ?? null,
+        unidade_base: d.unidade_base ?? null, conversoes: Array.isArray(d.conversoes) ? d.conversoes : null, pesoliquido: d.peso?.pesoliquido ?? null,
+      };
+    }
+    return {
+      pedido: {
+        id: p.id, codigo: p.codigo, criado_em: p.criado_no_app_em ?? p.recebido_em, dt_entrega: p.dt_entrega, status: p.status, tipo: p.tipo === 'bonificacao' ? 'bonificacao' : 'venda',
+        cond_pagamento: p.cond_pagamento, ordem_compra_cliente: p.ordem_compra_cliente, endereco_entrega: p.endereco_entrega, observacao: p.observacao,
+        itens, ordens_sap: Array.isArray(p.ordens_sap) ? p.ordens_sap : [],
+      },
+      cliente: c
+        ? {
+            cod_cliente: c.cod_cliente, nome_fantasia: c.nome_fantasia, razao_social: c.razao_social, cnpjcpf: c.cnpjcpf, telefone: c.telefone,
+            endereco: c.endereco, areas: Array.isArray(c.areas) ? c.areas : [], formas_pagamento: Array.isArray(c.formas_pagamento) ? c.formas_pagamento : null,
+          }
+        : null,
+      vendedor: ven.data ? { codigo: (ven.data as Linha).cod_vendedor, nome: (ven.data as Linha).nome ?? null, email: ((usu.data ?? []) as Linha[])[0]?.email ?? null } : null,
+      produtos,
+      tipo_bonificacao: (tip.data as Linha | null)?.descricao ?? p.tipo_bonificacao ?? null,
+    };
+  }
+
   /** Detalhe de uma ordem do SAP: itens, notas, quem vende, se pode cancelar e o historico de cancelamento. */
   async pedido(ordemRaw: string) {
     const ordem = this.ordemValida(ordemRaw);
