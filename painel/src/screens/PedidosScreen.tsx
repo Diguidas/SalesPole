@@ -147,7 +147,7 @@ export function PedidosScreen() {
       {dados && dados.itens.length > 0 && (
         <>
           <p className="suave" style={{ margin: '0 0 6px' }}>{dados.total.toLocaleString('pt-BR')} pedido{dados.total === 1 ? '' : 's'} · página {dados.pagina} de {totalPaginas}</p>
-          {origem === 'sap' ? (
+          {dados.origem === 'sap' ? (
             <table>
               <thead><tr><th>Ordem</th><th>Cliente</th><th>Vendedor</th><th>Criado</th><th>Entrega</th><th style={{ textAlign: 'right' }}>Valor</th><th>Status</th></tr></thead>
               <tbody>
@@ -175,7 +175,7 @@ export function PedidosScreen() {
                     <td>{p.vendedor ?? p.cod_vendedor}</td>
                     <td>{dataHora(p.recebido_em)}</td>
                     <td>{p.qtd_itens}</td>
-                    <td>{p.ordens.length ? p.ordens.map((o) => <a key={o} href="#" onClick={(e) => { e.preventDefault(); mudar(() => { setOrigem('sap'); setBuscaAplicada(o); setBusca(o); setDias(365); }); abrir(o); }} style={{ marginRight: 8 }}>{o}</a>) : '—'}</td>
+                    <td>{p.ordens.length ? p.ordens.map((o) => <a key={o} href="#" onClick={(e) => { e.preventDefault(); abrir(o); }} style={{ marginRight: 8 }}>{o}</a>) : '—'}</td>
                     <td>
                       <span className={`selo ${p.status === 'enviado' ? 'ok' : p.status === 'erro' || p.status === 'rejeitado' ? 'erro' : 'aviso'}`}>{STATUS_APP.find(([v]) => v === p.status)?.[1] ?? p.status}</span>
                       {p.erro ? <div className="erro-msg" style={{ margin: '4px 0 0' }}>{p.erro}</div> : null}

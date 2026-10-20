@@ -1,5 +1,5 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
-import { useAuth } from './auth';
+import { ehHierarquia, tem, useAuth } from './auth';
 import { Shell } from './screens/Shell';
 import { LoginScreen } from './screens/LoginScreen';
 import { ProdutosScreen } from './screens/ProdutosScreen';
@@ -21,6 +21,8 @@ export function App() {
 
   if (carregando) return <div className="vazio">Carregando…</div>;
   if (!sessao || !usuario) return <LoginScreen erro={erro} />;
+  // supervisor/gerente nao entram em cadastros nem sistema (o menu ja esconde; aqui barra o endereco digitado)
+  const semAdmin = ehHierarquia(usuario.papel);
 
   return (
     <Routes>
@@ -34,13 +36,13 @@ export function App() {
         <Route path="listas-preco" element={<ListasPrecoScreen />} />
         <Route path="bonificacoes" element={<BonificacoesScreen />} />
         <Route path="pedidos-antecipados" element={<Navigate to="/pedidos?antecipado=1&pendentes=1" replace />} />
-        <Route path="cadastros/:nome" element={<CadastroScreen />} />
+        <Route path="cadastros/:nome" element={semAdmin && !tem(usuario, 'comunicados') ? <Navigate to="/" replace /> : <CadastroScreen />} />
         <Route path="visitas" element={<VisitasScreen />} />
         <Route path="indicadores" element={<Navigate to="/" replace />} />
         <Route path="vendedores" element={<Navigate to="/usuarios" replace />} />
-        <Route path="monitor" element={<MonitorScreen />} />
-        <Route path="usuarios" element={<UsuariosScreen />} />
-        <Route path="parametros" element={<ParametrosScreen />} />
+        <Route path="monitor" element={semAdmin ? <Navigate to="/" replace /> : <MonitorScreen />} />
+        <Route path="usuarios" element={semAdmin ? <Navigate to="/" replace /> : <UsuariosScreen />} />
+        <Route path="parametros" element={semAdmin ? <Navigate to="/" replace /> : <ParametrosScreen />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

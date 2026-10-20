@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api';
-import { useAuth } from '../auth';
+import { useAuth, tem } from '../auth';
 import { useGavetas } from '../gavetas';
 import { PedidoDetalhe } from './PedidoDetalhe';
 
@@ -73,7 +73,7 @@ export function ClienteDetalheScreen() {
   const usado = c.limite_total != null && c.limite_disponivel != null ? Math.max(0, c.limite_total - c.limite_disponivel) : null;
   const pctLimite = usado != null && c.limite_total ? Math.min(100, (usado / c.limite_total) * 100) : 0;
   const maxMes = Math.max(...c.compras_por_mes.map((m) => m.valor), 1);
-  const podeCriar = usuario?.papel === 'admin' || usuario?.papel === 'aprovador';
+  const podeCriar = tem(usuario, 'criar_pedido');
   const vend = c.vendedores[0];
   const mapa = c.latitude != null && c.longitude != null ? <a href={`https://www.google.com/maps?q=${c.latitude},${c.longitude}`} target="_blank" rel="noreferrer">Ver no mapa</a> : 'sem coordenada';
 

@@ -3,10 +3,21 @@ import type { Session } from '@supabase/supabase-js';
 import { api, ErroApi } from './api';
 import { supabase } from './supabase';
 
+export type Papel = 'admin' | 'aprovador' | 'consulta' | 'supervisor' | 'gerente' | 'gerente_geral';
+
+/** Hierarquia comercial: ve so a propria equipe (gerente geral ve tudo) e nao acessa Cadastros nem Sistema. */
+export const ehHierarquia = (p?: Papel) => p === 'supervisor' || p === 'gerente' || p === 'gerente_geral';
+/** Aprova bonificacao, valida visita, cancela e cria pedido (dentro do escopo, no caso da hierarquia). */
+export const podeAprovar = (p?: Papel) => p === 'admin' || p === 'aprovador' || ehHierarquia(p);
+/** Acao liberada para o usuario (padrao do papel + ajustes do admin; administrador tem todas). */
+export const tem = (u: { papel: Papel; permissoes?: string[] } | null | undefined, chave: string) => u?.papel === 'admin' || (u?.permissoes ?? []).includes(chave);
+
 export interface UsuarioPainel {
   email: string;
   nome: string | null;
-  papel: 'admin' | 'aprovador' | 'consulta';
+  papel: Papel;
+  cod_sap?: string | null;
+  permissoes?: string[];
 }
 
 interface Ctx {

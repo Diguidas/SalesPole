@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
-import { useAuth } from '../auth';
+import { useAuth, tem } from '../auth';
 
 interface Foto { id: string; tipo: string; tirada_em: string; enviada: boolean; removida: boolean; url: string | null }
 interface Visita {
@@ -48,7 +48,7 @@ const isoDiasAtras = (n: number) => new Date(Date.now() - n * 86_400_000).toLoca
 /** Fila de validacao: a foto de fachada e o check-in provam que o vendedor esteve no cliente. */
 export function VisitasScreen() {
   const { usuario } = useAuth();
-  const podeDecidir = usuario?.papel === 'admin' || usuario?.papel === 'aprovador';
+  const podeDecidir = tem(usuario, 'validar_visita');
   const [validacao, setValidacao] = useState('pendente');
   const [dias, setDias] = useState(7);
   const [lista, setLista] = useState<Visita[] | null>(null);

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
-import { useAuth } from '../auth';
+import { ehHierarquia, useAuth } from '../auth';
 
 interface Grupo { chave: string; rotulo: string; valor: number; pedidos: number; clientes: number }
 interface Vendedor extends Grupo { carteira: number; positivacao_pct: number | null }
@@ -69,6 +69,7 @@ export function InicioScreen() {
 
   // faixa "precisa de atencao": falha nela nao atrapalha o resto da pagina
   useEffect(() => {
+    if (ehHierarquia(usuario?.papel)) return; // o monitor e do sistema: nao e liberado para a hierarquia
     api<Atencao>('/painel/monitor').then((r) => setAtencao(r.resumo)).catch(() => setAtencao(null));
   }, []);
 

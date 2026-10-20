@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import { Settings, UsersRound, ListOrdered, House, PlusCircle, Activity, Users, MapPinCheck, SlidersHorizontal, CalendarDays, ChevronDown, Gift, LogOut, Package, Percent, Star, Tag, Landmark, Boxes, ScrollText, Megaphone } from 'lucide-react';
-import { useAuth } from '../auth';
+import { ehHierarquia, tem, useAuth } from '../auth';
 import { GavetasProvider } from '../gavetas';
 import logo from '../assets/salespole.png';
 import poletech from '../assets/poletech.png';
@@ -54,6 +54,9 @@ const MENU: Array<Tela | Modulo> = [
   },
 ];
 
+/** Unico item do cadastro que supervisor/gerente podem ter (permissao "comunicados"). */
+const ITEM_COMUNICADOS = '/cadastros/avisos';
+
 const iniciais = (nome: string) => {
   const p = nome.trim().split(/[\s@.]+/).filter(Boolean);
   return ((p[0]?.[0] ?? '?') + (p.length > 1 ? p[1][0] : '')).toUpperCase();
@@ -80,9 +83,13 @@ export function Shell() {
     };
   }, []);
 
-  const visivel = (i: { soAdmin?: boolean; soAprovador?: boolean }) => (!i.soAdmin || usuario?.papel === 'admin') && (!i.soAprovador || usuario?.papel === 'admin' || usuario?.papel === 'aprovador');
+  const hierarquia = ehHierarquia(usuario?.papel);
+  const visivel = (i: { para: string; soAdmin?: boolean }) => (!i.soAdmin || usuario?.papel === 'admin') && (!hierarquia || i.para !== ITEM_COMUNICADOS || tem(usuario, 'comunicados'));
+  // supervisor/gerente: so o comercial; do cadastro, apenas os comunicados (se o admin liberar). Sistema fica escondido.
+  const itensDoModulo = (m: Modulo) => (hierarquia && m.rotulo === 'Cadastros' ? m.itens.filter((i) => i.para === ITEM_COMUNICADOS && tem(usuario, 'comunicados')) : m.itens).filter(visivel);
+  const moduloVisivel = (m: Tela | Modulo) => m.tipo === 'tela' ? !m.soAdmin || usuario?.papel === 'admin' : !(hierarquia && m.rotulo === 'Sistema') && itensDoModulo(m).length > 0;
   const nome = usuario?.nome || usuario?.email || '';
-  const rotuloPapel = { admin: 'Administrador', aprovador: 'Aprovador', consulta: 'Consulta' }[usuario?.papel ?? 'consulta'];
+  const rotuloPapel = { admin: 'Administrador', aprovador: 'Aprovador', consulta: 'Consulta', supervisor: 'Supervisor', gerente: 'Gerente', gerente_geral: 'Gerente geral' }[usuario?.papel ?? 'consulta'];
 
   return (
     <GavetasProvider>
@@ -90,7 +97,7 @@ export function Shell() {
       <header className="topbar" ref={barra}>
         <img className="topbar-logo" src={logo} alt="Sales Pole" />
         <nav className="topnav">
-          {MENU.filter((m) => (m.tipo === 'tela' ? !m.soAdmin || usuario?.papel === 'admin' : m.itens.some(visivel))).map((m) =>
+          {MENU.filter(moduloVisivel).map((m) =>
             m.tipo === 'tela' ? (
               <NavLink key={m.para} to={m.para} end={m.para === '/'} className={({ isActive }) => `tab${isActive ? ' ativo' : ''}`}>
                 {m.icone}
@@ -110,7 +117,7 @@ export function Shell() {
                 </button>
                 {aberto === m.rotulo && (
                   <div className="lista" role="menu">
-                    {m.itens.filter(visivel).map((i) => (
+                    {itensDoModulo(m).map((i) => (
                       <NavLink key={i.para} to={i.para} role="menuitem" className={({ isActive }) => `opcao${isActive ? ' ativo' : ''}`}>
                         {i.icone}
                         {i.rotulo}
@@ -122,7 +129,7 @@ export function Shell() {
             ),
           )}
         </nav>
-        {(usuario?.papel === 'admin' || usuario?.papel === 'aprovador') && (
+        {tem(usuario, 'criar_pedido') && (
           <Link to="/novo-pedido" className="btn-destaque" title="Criar um pedido em nome de um vendedor">
             <PlusCircle size={16} strokeWidth={2.2} />
             <span>Novo pedido</span>

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
-import { useAuth } from '../auth';
+import { useAuth, tem } from '../auth';
 
 interface Bonificacao {
   id: string;
@@ -32,7 +32,7 @@ const dataHora = (iso: string) => new Date(iso).toLocaleString('pt-BR', { dateSt
 /** Fila de aprovacao de bonificacao: o vendedor ve o resultado no app (aba Analise). */
 export function BonificacoesScreen() {
   const { usuario } = useAuth();
-  const podeDecidir = usuario?.papel === 'admin' || usuario?.papel === 'aprovador';
+  const podeDecidir = tem(usuario, 'aprovar_bonificacao');
   const [status, setStatus] = useState('aguardando_aprovacao');
   const [lista, setLista] = useState<Bonificacao[] | null>(null);
   const [erro, setErro] = useState<string | null>(null);

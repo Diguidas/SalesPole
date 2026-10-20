@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Navigate, useParams } from 'react-router-dom';
 import { api } from '../api';
-import { useAuth } from '../auth';
+import { ehHierarquia, tem, useAuth } from '../auth';
 import { CADASTROS, traco, type Campo, type DefCadastro } from './cadastros';
 
 type Linha = Record<string, unknown> & { ativo?: boolean };
@@ -27,9 +27,15 @@ export function CadastroScreen() {
   return <Cadastro key={nome} def={def} />;
 }
 
-function Cadastro({ def }: { def: DefCadastro }) {
+function Cadastro({ def: defBase }: { def: DefCadastro }) {
   const { usuario } = useAuth();
-  const admin = usuario?.papel === 'admin';
+  // admin altera tudo; quem tem a permissao "comunicados" altera so os avisos
+  const admin = usuario?.papel === 'admin' || (defBase.nome === 'avisos' && tem(usuario, 'comunicados'));
+  // supervisor/gerente so criam aviso para vendedores da propria equipe: o formulario so oferece essa opcao
+  const def = useMemo<DefCadastro>(() => {
+    if (defBase.nome !== 'avisos' || !ehHierarquia(usuario?.papel) || usuario?.papel === 'gerente_geral') return defBase;
+    return { ...defBase, campos: defBase.campos.map((c) => (c.chave === 'escopo' ? { ...c, opcoes: c.opcoes?.filter((o) => o.v === 'vendedor') } : c)) };
+  }, [defBase, usuario?.papel]);
   const [lista, setLista] = useState<Linha[] | null>(null);
   const [erro, setErro] = useState<string | null>(null);
   const [editando, setEditando] = useState<Linha | 'novo' | null>(null);

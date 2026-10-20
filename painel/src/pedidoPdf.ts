@@ -372,7 +372,6 @@ function htmlFolha(d: DocPedido, f: FolhaDoc, idx: number): string {
   </div>
   <div class="linha">
     ${caixa('Situação do pedido', esc(d.situacao), 'w3')}
-    ${caixa('Referência', esc(d.referencia), 'w2')}
     ${caixa('Tabela de preços', esc(d.tabelaPrecos), 'w2')}
   </div>
 

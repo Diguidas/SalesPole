@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
-import { useAuth } from '../auth';
+import { useAuth, tem } from '../auth';
+import { imprimirPedidoApp } from '../pdfPedido';
 
 interface PedidoSapBase {
   ordem: string; cod_cliente: string; cliente: string | null; rota: string | null; vendedor: string | null;
@@ -12,6 +13,7 @@ interface Detalhe extends PedidoSapBase {
   notas: Array<{ nota_fiscal?: string; serie?: string; danfe_url?: string; xml_url?: string; boleto_url?: string }> | number;
   itens: Array<{ item: string; cod_produto: string; denominacao: string | null; quantidade: number | null; unidade_venda: string | null; valor_unitario: number | null; recusa: string | null }>;
   cancelavel: boolean;
+  pedido_app_id: string | null;
   cancelamentos: Array<{ resultado: string; status_antes: string | null; motivo: string | null; por: string | null; criado_em: string }>;
 }
 
@@ -23,7 +25,7 @@ const tomStatus = (s: string | null) => { const t = (s ?? '').toLowerCase(); ret
 /** Conteudo da gaveta de um pedido do SAP: itens, notas, cancelamento. */
 export function PedidoDetalhe({ ordem, aoMudar }: { ordem: string; aoMudar?: () => void }) {
   const { usuario } = useAuth();
-  const podeCancelar = usuario?.papel === 'admin' || usuario?.papel === 'aprovador';
+  const podeCancelar = tem(usuario, 'cancelar_pedido');
   const [d, setD] = useState<Detalhe | null>(null);
   const [erro, setErro] = useState<string | null>(null);
   const [aviso, setAviso] = useState<string | null>(null);
@@ -142,6 +144,7 @@ export function PedidoDetalhe({ ordem, aoMudar }: { ordem: string; aoMudar?: () 
 
             <div style={{ display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap' }}>
               <button className="btn" disabled={ocupado} onClick={atualizar}>{ocupado ? 'Aguarde…' : 'Atualizar do SAP'}</button>
+              {d.pedido_app_id && <button className="btn" disabled={ocupado} onClick={() => { setErro(null); imprimirPedidoApp(d.pedido_app_id!).catch((e) => setErro((e as Error).message)); }} title="Abre a confirmação do pedido; escolha Salvar como PDF">PDF do pedido</button>}
               {podeCancelar && d.cancelavel && !cancelando && <button className="btn erro" disabled={ocupado} onClick={() => setCancelando(true)}>Cancelar pedido</button>}
             </div>
             {podeCancelar && !d.cancelavel && <p className="suave" style={{ marginTop: 8 }}>Neste status ({d.status ?? 'sem status'}) o cancelamento não está liberado. Os status liberados ficam em Parâmetros.</p>}
