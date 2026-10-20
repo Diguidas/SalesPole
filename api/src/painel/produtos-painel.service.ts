@@ -1,3 +1,4 @@
+import { Escopo } from './escopo';
 import { Inject, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE } from '../supabase/supabase.module';
@@ -71,7 +72,7 @@ export class ProdutosPainelService {
   }
 
   /** Uma lista: produtos com preco (vigentes e vencidos) e a primeira pagina de clientes. */
-  async listaPreco(pltyp: string) {
+  async listaPreco(pltyp: string, escopo: Escopo | null = null) {
     const cod = exato(pltyp, 5);
     if (!cod) throw new UnprocessableEntityException('Lista invalida');
     const lista = (await this.listasPreco()).find((l) => l.pltyp === cod);
@@ -98,14 +99,14 @@ export class ProdutosPainelService {
         de: x.datab, ate: x.datbi, vigente: x.datab <= hoje && hoje <= x.datbi,
       }))
       .sort((a, b) => Number(b.vigente) - Number(a.vigente) || String(a.descricao ?? a.cod_produto).localeCompare(String(b.descricao ?? b.cod_produto), 'pt-BR'));
-    return { ...lista, produtos_lista: produtos, clientes_lista: await this.clientesDaLista(cod, {}) };
+    return { ...lista, produtos_lista: produtos, clientes_lista: await this.clientesDaLista(cod, {}, escopo) };
   }
 
-  async clientesDaLista(pltyp: string, f: { busca?: string; pagina?: string }) {
+  async clientesDaLista(pltyp: string, f: { busca?: string; pagina?: string }, escopo: Escopo | null = null) {
     const cod = exato(pltyp, 5);
     const pg = pagina(f.pagina);
     const { data, error } = await this.sb.rpc('fn_clientes_da_lista', {
-      p_pltyp: cod, p_busca: texto(f.busca), p_limite: POR_PAGINA_CLIENTES, p_offset: (pg - 1) * POR_PAGINA_CLIENTES,
+      p_pltyp: cod, p_busca: texto(f.busca), p_limite: POR_PAGINA_CLIENTES, p_offset: (pg - 1) * POR_PAGINA_CLIENTES, p_rotas: escopo?.rotas ?? null,
     });
     if (error) throw new Error(`fn_clientes_da_lista: ${error.message}`);
     const linhas = (data ?? []) as Linha[];

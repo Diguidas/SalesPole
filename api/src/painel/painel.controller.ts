@@ -1,5 +1,6 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, Req, UseGuards } from '@nestjs/common';
-import { PainelGuard, Papeis, UsuarioPainel } from './painel.guard';
+import { Body, Controller, ForbiddenException, Get, Param, ParseUUIDPipe, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { PainelGuard, Papeis, Permissoes, SoPapeis, UsuarioPainel } from './painel.guard';
+import { PADROES, PERMISSOES } from './permissoes';
 import { IndicadoresService } from './indicadores.service';
 import { MonitorService } from './monitor.service';
 import { SincronizacaoService } from './sincronizacao.service';
@@ -28,22 +29,23 @@ export class PainelController {
 
   @Get('eu')
   eu(@Req() req: { usuarioPainel: UsuarioPainel }) {
-    return req.usuarioPainel;
+    const { escopo: _escopo, ...u } = req.usuarioPainel; // o escopo (listas de vendedores/rotas) fica so no servidor
+    return u;
   }
 
   @Get('bonificacoes')
-  bonificacoes(@Query('status') status?: string) {
-    return this.painel.bonificacoes(status);
+  bonificacoes(@Req() req: { usuarioPainel: UsuarioPainel }, @Query('status') status?: string) {
+    return this.painel.bonificacoes(req.usuarioPainel.escopo, status);
   }
 
   @Post('bonificacoes/:id/aprovar')
-  @Papeis('aprovador')
+  @Permissoes('aprovar_bonificacao')
   aprovar(@Req() req: { usuarioPainel: UsuarioPainel }, @Param('id', ParseUUIDPipe) id: string) {
     return this.painel.decidirBonificacao(req.usuarioPainel, id, true);
   }
 
   @Post('bonificacoes/:id/rejeitar')
-  @Papeis('aprovador')
+  @Permissoes('aprovar_bonificacao')
   rejeitar(@Req() req: { usuarioPainel: UsuarioPainel }, @Param('id', ParseUUIDPipe) id: string, @Body() body: { motivo?: string }) {
     return this.painel.decidirBonificacao(req.usuarioPainel, id, false, body?.motivo);
   }
@@ -51,39 +53,41 @@ export class PainelController {
   // ---- consulta geral: pedidos e clientes (todos veem; cancelar pedido so admin e aprovador) ----
   @Get('pedidos')
   listarPedidos(
+    @Req() req: { usuarioPainel: UsuarioPainel },
     @Query('origem') origem?: string, @Query('ini') ini?: string, @Query('fim') fim?: string, @Query('vendedor') vendedor?: string,
     @Query('busca') busca?: string, @Query('status') status?: string, @Query('antecipado') antecipado?: string, @Query('pendentes') pendentes?: string, @Query('pagina') pagina?: string,
   ) {
-    return this.consulta.listarPedidos({ origem, ini, fim, vendedor, busca, status, antecipado, pendentes, pagina });
+    return this.consulta.listarPedidos(req.usuarioPainel.escopo, { origem, ini, fim, vendedor, busca, status, antecipado, pendentes, pagina });
   }
 
   @Get('pedidos/:ordem')
-  pedidoSap(@Param('ordem') ordem: string) {
-    return this.consulta.pedido(ordem);
+  pedidoSap(@Req() req: { usuarioPainel: UsuarioPainel }, @Param('ordem') ordem: string) {
+    return this.consulta.pedido(ordem, req.usuarioPainel.escopo);
   }
 
   @Post('pedidos/:ordem/atualizar')
-  atualizarPedido(@Param('ordem') ordem: string) {
-    return this.consulta.atualizarPedido(ordem);
+  atualizarPedido(@Req() req: { usuarioPainel: UsuarioPainel }, @Param('ordem') ordem: string) {
+    return this.consulta.atualizarPedido(req.usuarioPainel.escopo, ordem);
   }
 
   @Post('pedidos/:ordem/cancelar')
-  @Papeis('aprovador')
+  @Permissoes('cancelar_pedido')
   cancelarPedido(@Req() req: { usuarioPainel: UsuarioPainel }, @Param('ordem') ordem: string, @Body() corpo: { motivo?: string }) {
     return this.consulta.cancelarPedido(req.usuarioPainel, ordem, corpo?.motivo);
   }
 
   @Get('pedido-app/:id/pdf-dados')
-  pedidoAppPdf(@Param('id') id: string) {
-    return this.consulta.pedidoAppParaPdf(id);
+  pedidoAppPdf(@Req() req: { usuarioPainel: UsuarioPainel }, @Param('id') id: string) {
+    return this.consulta.pedidoAppParaPdf(id, req.usuarioPainel.escopo);
   }
 
   @Get('clientes')
   listarClientes(
+    @Req() req: { usuarioPainel: UsuarioPainel },
     @Query('vendedor') vendedor?: string, @Query('busca') busca?: string, @Query('escritorio') escritorio?: string,
     @Query('canal') canal?: string, @Query('situacao') situacao?: string, @Query('pagina') pagina?: string,
   ) {
-    return this.consulta.listarClientes({ vendedor, busca, escritorio, canal, situacao, pagina });
+    return this.consulta.listarClientes(req.usuarioPainel.escopo, { vendedor, busca, escritorio, canal, situacao, pagina });
   }
 
   @Get('clientes-filtros')
@@ -92,51 +96,51 @@ export class PainelController {
   }
 
   @Get('clientes/:cod')
-  cliente(@Param('cod') cod: string) {
-    return this.consulta.cliente(cod);
+  cliente(@Req() req: { usuarioPainel: UsuarioPainel }, @Param('cod') cod: string) {
+    return this.consulta.cliente(cod, req.usuarioPainel.escopo);
   }
 
   // ---- pedido em nome do vendedor (admin e aprovador) ----
   @Get('pedido-novo/vendedores')
-  @Papeis('aprovador')
-  vendedoresParaPedido() {
-    return this.pedidoPainel.vendedores();
+  @Permissoes('criar_pedido')
+  vendedoresParaPedido(@Req() req: { usuarioPainel: UsuarioPainel }) {
+    return this.pedidoPainel.vendedores(req.usuarioPainel.escopo);
   }
 
   @Get('pedido-novo/clientes')
-  @Papeis('aprovador')
-  clientesParaPedido(@Query('vendedor') vendedor = '', @Query('q') q = '') {
-    return this.pedidoPainel.clientes(vendedor, q);
+  @Permissoes('criar_pedido')
+  clientesParaPedido(@Req() req: { usuarioPainel: UsuarioPainel }, @Query('vendedor') vendedor = '', @Query('q') q = '') {
+    return this.pedidoPainel.clientes(vendedor, q, req.usuarioPainel.escopo);
   }
 
   @Get('pedido-novo/produtos')
-  @Papeis('aprovador')
+  @Permissoes('criar_pedido')
   produtosParaPedido(@Query('cliente') cliente = '', @Query('q') q = '') {
     return this.catalogo.produtos(cliente, q);
   }
 
   @Post('pedido-novo/cotar')
-  @Papeis('aprovador')
-  cotarPedido(@Body() corpo: { vendedor?: string; cliente?: string; itens?: unknown }) {
-    return this.catalogo.cotar(String(corpo?.vendedor ?? ''), String(corpo?.cliente ?? ''), corpo?.itens);
+  @Permissoes('criar_pedido')
+  cotarPedido(@Req() req: { usuarioPainel: UsuarioPainel }, @Body() corpo: { vendedor?: string; cliente?: string; itens?: unknown }) {
+    return this.catalogo.cotar(String(corpo?.vendedor ?? ''), String(corpo?.cliente ?? ''), corpo?.itens, req.usuarioPainel.escopo);
   }
 
   @Post('pedido-novo/carteira')
-  @Papeis('aprovador')
-  carregarCarteira(@Body() corpo: { vendedor?: string }) {
-    return this.pedidoPainel.carregarCarteira(String(corpo?.vendedor ?? ''));
+  @Permissoes('criar_pedido')
+  carregarCarteira(@Req() req: { usuarioPainel: UsuarioPainel }, @Body() corpo: { vendedor?: string }) {
+    return this.pedidoPainel.carregarCarteira(String(corpo?.vendedor ?? ''), req.usuarioPainel.escopo);
   }
 
   @Post('pedidos')
-  @Papeis('aprovador')
+  @Permissoes('criar_pedido')
   criarPedido(@Req() req: { usuarioPainel: UsuarioPainel }, @Body() corpo: Record<string, unknown>) {
     return this.pedidoPainel.criar(req.usuarioPainel, corpo ?? {});
   }
 
   // ---- gerencial: indicadores de vendas (todos veem) e escolha dos vendedores (so admin) ----
   @Get('indicadores')
-  verIndicadores(@Query('ini') ini?: string, @Query('fim') fim?: string) {
-    return this.indicadores.vendas(ini, fim);
+  verIndicadores(@Req() req: { usuarioPainel: UsuarioPainel }, @Query('ini') ini?: string, @Query('fim') fim?: string) {
+    return this.indicadores.vendas(ini, fim, req.usuarioPainel.escopo);
   }
 
   @Get('vendedores')
@@ -171,12 +175,14 @@ export class PainelController {
 
   // ---- monitor: saude do sistema (todos veem; reenviar so admin/aprovador) ----
   @Get('monitor')
+  @SoPapeis('admin', 'aprovador', 'consulta')
   verMonitor() {
     return this.monitor.visao();
   }
 
   @Post('monitor/pedidos/:id/reenviar')
   @Papeis('aprovador')
+  @SoPapeis('aprovador')
   reenviarPedido(@Req() req: { usuarioPainel: UsuarioPainel }, @Param('id', ParseUUIDPipe) id: string) {
     return this.monitor.reenviarPedido(req.usuarioPainel, id);
   }
@@ -219,6 +225,24 @@ export class PainelController {
     return this.usuarios.gravarPainel(req.usuarioPainel, corpo ?? {});
   }
 
+  @Post('usuarios/painel/papel')
+  @Papeis('admin')
+  mudarPapelUsuario(@Req() req: { usuarioPainel: UsuarioPainel }, @Body() corpo: { email?: string; papel?: string }) {
+    return this.usuarios.mudarPapel(req.usuarioPainel, String(corpo?.email ?? ''), String(corpo?.papel ?? ''));
+  }
+
+  @Get('usuarios/permissoes')
+  @Papeis('admin')
+  catalogoPermissoes() {
+    return { catalogo: PERMISSOES, padroes: PADROES };
+  }
+
+  @Get('usuarios/supervisores-sap')
+  @Papeis('admin')
+  listarSupervisoresSap() {
+    return this.usuarios.listarSupervisoresSap();
+  }
+
   @Get('usuarios/vendedores')
   @Papeis('admin')
   listarUsuariosVendedores() {
@@ -233,12 +257,12 @@ export class PainelController {
 
   // ---- visitas: validacao da visita e da foto (aprovador/admin) ----
   @Get('visitas')
-  visitas(@Query('validacao') validacao?: string, @Query('ini') ini?: string, @Query('fim') fim?: string, @Query('vendedor') vendedor?: string) {
-    return this.painel.visitas({ validacao, ini, fim, vendedor });
+  visitas(@Req() req: { usuarioPainel: UsuarioPainel }, @Query('validacao') validacao?: string, @Query('ini') ini?: string, @Query('fim') fim?: string, @Query('vendedor') vendedor?: string) {
+    return this.painel.visitas(req.usuarioPainel.escopo, { validacao, ini, fim, vendedor });
   }
 
   @Post('visitas/:id/validar')
-  @Papeis('aprovador')
+  @Permissoes('validar_visita')
   validarVisita(@Req() req: { usuarioPainel: UsuarioPainel }, @Param('id', ParseUUIDPipe) id: string, @Body() corpo: { validada?: boolean; obs?: string }) {
     return this.painel.validarVisita(req.usuarioPainel, id, corpo?.validada === true, corpo?.obs);
   }
@@ -272,13 +296,13 @@ export class PainelController {
   }
 
   @Get('listas-preco/:pltyp')
-  listaPreco(@Param('pltyp') pltyp: string) {
-    return this.produtosPainel.listaPreco(pltyp);
+  listaPreco(@Req() req: { usuarioPainel: UsuarioPainel }, @Param('pltyp') pltyp: string) {
+    return this.produtosPainel.listaPreco(pltyp, req.usuarioPainel.escopo);
   }
 
   @Get('listas-preco/:pltyp/clientes')
-  clientesDaLista(@Param('pltyp') pltyp: string, @Query('busca') busca?: string, @Query('pagina') pagina?: string) {
-    return this.produtosPainel.clientesDaLista(pltyp, { busca, pagina });
+  clientesDaLista(@Req() req: { usuarioPainel: UsuarioPainel }, @Param('pltyp') pltyp: string, @Query('busca') busca?: string, @Query('pagina') pagina?: string) {
+    return this.produtosPainel.clientesDaLista(pltyp, { busca, pagina }, req.usuarioPainel.escopo);
   }
 
   // ---- cadastros: todos veem, so admin altera ----
@@ -288,20 +312,27 @@ export class PainelController {
   }
 
   @Get('cadastros/:nome')
-  listarCadastro(@Param('nome') nome: string) {
-    return this.painel.listarCadastro(nome);
+  listarCadastro(@Req() req: { usuarioPainel: UsuarioPainel }, @Param('nome') nome: string) {
+    return this.painel.listarCadastro(nome, req.usuarioPainel.escopo);
   }
 
+  // admin altera qualquer cadastro; quem tem a permissao "comunicados" altera so os avisos (dentro da equipe, se tiver escopo)
   @Post('cadastros/:nome')
-  @Papeis('admin')
-  gravarCadastro(@Param('nome') nome: string, @Body() corpo: Record<string, unknown>) {
-    return this.painel.gravarCadastro(nome, corpo);
+  gravarCadastro(@Req() req: { usuarioPainel: UsuarioPainel }, @Param('nome') nome: string, @Body() corpo: Record<string, unknown>) {
+    this.exigirCadastro(req.usuarioPainel, nome);
+    return this.painel.gravarCadastro(nome, corpo, req.usuarioPainel.escopo);
   }
 
   @Post('cadastros/:nome/ativo')
-  @Papeis('admin')
-  ativarCadastro(@Param('nome') nome: string, @Body() corpo: { chave?: string; ativo?: boolean }) {
-    return this.painel.ativarCadastro(nome, String(corpo?.chave ?? ''), corpo?.ativo === true);
+  ativarCadastro(@Req() req: { usuarioPainel: UsuarioPainel }, @Param('nome') nome: string, @Body() corpo: { chave?: string; ativo?: boolean }) {
+    this.exigirCadastro(req.usuarioPainel, nome);
+    return this.painel.ativarCadastro(nome, String(corpo?.chave ?? ''), corpo?.ativo === true, req.usuarioPainel.escopo);
+  }
+
+  private exigirCadastro(u: UsuarioPainel, nome: string) {
+    if (u.papel === 'admin') return;
+    if (nome === 'avisos' && u.permissoes.includes('comunicados')) return;
+    throw new ForbiddenException('Seu perfil nao permite alterar este cadastro');
   }
 
 }

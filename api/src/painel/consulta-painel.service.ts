@@ -4,6 +4,7 @@ import { PedidosService } from '../pedidos/pedidos.service';
 import { SUPABASE } from '../supabase/supabase.module';
 import { SyncService } from '../sync/sync.service';
 import { UsuarioPainel } from './painel.guard';
+import { Escopo, exigirRota, exigirVendedor } from './escopo';
 
 type Linha = Record<string, any>;
 
@@ -31,7 +32,7 @@ export class ConsultaPainelService {
   // =====================================================================
 
   /** Pedidos do SAP (padrao) ou os criados pelo app/painel (origem=app), com filtros e paginacao. */
-  async listarPedidos(f: { origem?: string; ini?: string; fim?: string; vendedor?: string; busca?: string; status?: string; antecipado?: string; pendentes?: string; pagina?: string }) {
+  async listarPedidos(escopo: Escopo | null, f: { origem?: string; ini?: string; fim?: string; vendedor?: string; busca?: string; status?: string; antecipado?: string; pendentes?: string; pagina?: string }) {
     if ((f.ini && !DIA.test(f.ini)) || (f.fim && !DIA.test(f.fim))) throw new UnprocessableEntityException('datas devem ser AAAA-MM-DD');
     const ini = f.ini || diasAtras(30);
     const fim = f.fim || hojeSp();
@@ -39,10 +40,10 @@ export class ConsultaPainelService {
     const pg = pagina(f.pagina);
     const vendedor = (f.vendedor ?? '').replace(/^0+/, '');
 
-    if (f.origem === 'app') return this.listarPedidosApp({ ini, fim, vendedor, busca: texto(f.busca), status: exato(f.status, 30) }, pg);
+    if (f.origem === 'app') return this.listarPedidosApp(escopo, { ini, fim, vendedor, busca: texto(f.busca), status: exato(f.status, 30) }, pg);
 
     const { data, error } = await this.sb.rpc('fn_pedidos_painel', {
-      p_ini: ini, p_fim: fim, p_vendedor: vendedor, p_busca: texto(f.busca), p_status: exato(f.status, 40), p_antecipado: f.antecipado === '1', p_pendentes: f.pendentes === '1', p_limite: POR_PAGINA, p_offset: (pg - 1) * POR_PAGINA,
+      p_ini: ini, p_fim: fim, p_vendedor: vendedor, p_busca: texto(f.busca), p_status: exato(f.status, 40), p_antecipado: f.antecipado === '1', p_pendentes: f.pendentes === '1', p_limite: POR_PAGINA, p_offset: (pg - 1) * POR_PAGINA, p_rotas: escopo?.rotas ?? null,
     });
     if (error) throw new Error(`fn_pedidos_painel: ${error.message}`);
     const linhas = (data ?? []) as Linha[];
@@ -56,13 +57,14 @@ export class ConsultaPainelService {
   }
 
   /** Pedidos criados pelo app ou pelo painel (inclui os que ainda nao chegaram ao SAP). */
-  private async listarPedidosApp(f: { ini: string; fim: string; vendedor: string; busca: string; status: string }, pg: number) {
+  private async listarPedidosApp(escopo: Escopo | null, f: { ini: string; fim: string; vendedor: string; busca: string; status: string }, pg: number) {
     let q = this.sb
       .from('pedidos_app')
       .select('id, codigo, cod_vendedor, cod_cliente, tipo, status, erro, ordens_sap, itens, recebido_em, criado_por_painel, motivo_rejeicao')
       .gte('recebido_em', `${f.ini}T00:00:00-03:00`)
       .lte('recebido_em', `${f.fim}T23:59:59-03:00`)
       .order('recebido_em', { ascending: false });
+    if (escopo) q = q.in('cod_vendedor', escopo.vendedores);
     if (f.vendedor) q = q.eq('cod_vendedor', f.vendedor);
     if (f.status) q = q.eq('status', f.status);
     const { data, error } = await q.limit(1000);
@@ -97,7 +99,7 @@ export class ConsultaPainelService {
    * Dados do PDF de confirmacao de um pedido criado pelo app/painel. O painel monta o documento com o mesmo codigo
    * do app (pedidoPdf.ts); aqui so entrega o que ele precisa, ja lido do banco.
    */
-  async pedidoAppParaPdf(idRaw: string) {
+  async pedidoAppParaPdf(idRaw: string, escopo: Escopo | null = null) {
     const id = String(idRaw ?? '').trim();
     if (!/^[0-9a-f-]{36}$/i.test(id)) throw new UnprocessableEntityException('id invalido');
     const { data, error } = await this.sb
@@ -108,6 +110,7 @@ export class ConsultaPainelService {
     if (error) throw error;
     if (!data) throw new NotFoundException('Pedido nao encontrado');
     const p = data as Linha;
+    exigirVendedor(escopo, p.cod_vendedor);
     const itens = (Array.isArray(p.itens) ? p.itens : []) as Linha[];
     const codigos = [...new Set(itens.map((i) => String(i.produto)))];
 
@@ -148,7 +151,7 @@ export class ConsultaPainelService {
   }
 
   /** Detalhe de uma ordem do SAP: itens, notas, quem vende, se pode cancelar e o historico de cancelamento. */
-  async pedido(ordemRaw: string) {
+  async pedido(ordemRaw: string, escopo: Escopo | null = null) {
     const ordem = this.ordemValida(ordemRaw);
     const { data: p, error } = await this.sb.from('pedidos_sap').select('*').eq('ordem', ordem).maybeSingle();
     if (error) throw error;
@@ -164,7 +167,10 @@ export class ConsultaPainelService {
     ]);
     for (const r of [cli, rc, itens, canc, par]) if (r.error) throw r.error;
 
+    // pedido do app/painel que originou esta ordem (so ele tem o PDF de confirmacao); pedidos que nao vieram do app ficam sem
+    const { data: origemApp } = await this.sb.from('pedidos_app').select('id').filter('ordens_sap', 'cs', JSON.stringify([{ ordem }])).limit(1);
     const rota = ((rc.data ?? []) as Linha[])[0]?.rota ?? null;
+    exigirRota(escopo, rota);
     const vendedores = rota ? await this.vendedoresDaRota(rota) : [];
     const liberados = (Array.isArray((par.data as Linha | null)?.valor) ? ((par.data as Linha).valor as unknown[]) : []).map((x) => String(x).trim().toLowerCase()).filter(Boolean);
     const status = String(ped.status ?? '').trim().toLowerCase();
@@ -178,13 +184,14 @@ export class ConsultaPainelService {
       itens: ((itens.data ?? []) as Linha[]).map((i) => ({ ...i, quantidade: i.quantidade == null ? null : Number(i.quantidade), valor_unitario: i.valor_unitario == null ? null : Number(i.valor_unitario) })),
       cancelamentos: canc.data ?? [],
       cancelavel: liberados.includes(status),
+      pedido_app_id: ((origemApp ?? []) as Linha[])[0]?.id ?? null,
     };
   }
 
   /** Busca a ordem de novo no SAP (cabecalho e itens) e devolve o detalhe atualizado. */
-  async atualizarPedido(ordemRaw: string) {
+  async atualizarPedido(escopo: Escopo | null, ordemRaw: string) {
     const ordem = this.ordemValida(ordemRaw);
-    const det = await this.pedido(ordem);
+    const det = await this.pedido(ordem, escopo);
     const cod = det.vendedores[0]?.cod_vendedor as string | undefined;
     if (!cod) throw new ConflictException('Nao ha vendedor sincronizado para a carteira deste cliente');
     try {
@@ -192,13 +199,13 @@ export class ConsultaPainelService {
     } catch (e) {
       throw new ConflictException(`O SAP nao respondeu: ${(e as Error).message}`);
     }
-    return this.pedido(ordem);
+    return this.pedido(ordem, escopo);
   }
 
   /** Cancela a ordem no SAP em nome do vendedor da carteira (so nos status liberados em Parametros). Fica auditado com o e-mail de quem pediu. */
   async cancelarPedido(u: UsuarioPainel, ordemRaw: string, motivo?: string) {
     const ordem = this.ordemValida(ordemRaw);
-    const det = await this.pedido(ordem);
+    const det = await this.pedido(ordem, u.escopo);
     const v = det.vendedores[0];
     if (!v?.cod_vendedor || !det.rota) throw new ConflictException('Nao ha vendedor sincronizado para a carteira deste cliente');
     return this.pedidos.cancelarOrdemSap({ email: u.email, codVendedor: v.cod_vendedor, rota: det.rota }, ordem, motivo ?? null, u.email);
@@ -208,13 +215,13 @@ export class ConsultaPainelService {
   // Clientes
   // =====================================================================
 
-  async listarClientes(f: { vendedor?: string; busca?: string; escritorio?: string; canal?: string; situacao?: string; pagina?: string }) {
+  async listarClientes(escopo: Escopo | null, f: { vendedor?: string; busca?: string; escritorio?: string; canal?: string; situacao?: string; pagina?: string }) {
     const situacao = exato(f.situacao, 20);
     if (situacao && !['bloqueados', 'parados', 'vencidos', 'antecipado'].includes(situacao)) throw new UnprocessableEntityException('situacao invalida');
     const pg = pagina(f.pagina);
     const { data, error } = await this.sb.rpc('fn_clientes_painel', {
       p_vendedor: (f.vendedor ?? '').replace(/^0+/, ''), p_busca: texto(f.busca), p_escritorio: exato(f.escritorio, 10), p_canal: exato(f.canal, 10),
-      p_situacao: situacao, p_limite: POR_PAGINA, p_offset: (pg - 1) * POR_PAGINA,
+      p_situacao: situacao, p_limite: POR_PAGINA, p_offset: (pg - 1) * POR_PAGINA, p_rotas: escopo?.rotas ?? null,
     });
     if (error) throw new Error(`fn_clientes_painel: ${error.message}`);
     const linhas = (data ?? []) as Linha[];
@@ -236,7 +243,7 @@ export class ConsultaPainelService {
   }
 
   /** Tudo de um cliente: cadastro, comercial, financeiro, compras (12 meses), visitas e produtos que mais compra. */
-  async cliente(codRaw: string) {
+  async cliente(codRaw: string, escopo: Escopo | null = null) {
     const cod = String(codRaw ?? '').trim().replace(/^0+/, '');
     if (!/^\d{1,10}$/.test(cod)) throw new UnprocessableEntityException('Codigo de cliente invalido');
     const { data: c, error } = await this.sb.from('clientes').select('*').eq('cod_cliente', cod).maybeSingle();
@@ -249,12 +256,20 @@ export class ConsultaPainelService {
     const [rc, peds, tits, vis] = await Promise.all([
       this.sb.from('rota_clientes').select('rota, dia_semana, sequencia').eq('cod_cliente', cod).order('rota').limit(30),
       this.sb.from('pedidos_sap').select('ordem, dt_criacao, valor, status').eq('cod_cliente', cod).gte('dt_criacao', desde12).order('dt_criacao', { ascending: false }).limit(1000),
-      this.sb.from('titulos').select('nfe, parcela, status, valor, vencimento, dt_compensacao, boleto_url').eq('cod_cliente', cod).order('vencimento', { ascending: false }).limit(60),
+      this.sb.from('titulos').select('nfe, parcela, status, valor, vencimento, dt_compensacao, ordem, danfe_url, boleto_url').eq('cod_cliente', cod).order('vencimento', { ascending: false }).limit(60),
       this.sb.from('visitas').select('id, data_visita, cod_vendedor, status, resultado, motivo_nao_venda, validacao, fora_do_raio').eq('cod_cliente', cod).gte('data_visita', desdeV).order('data_visita', { ascending: false }).limit(10),
     ]);
     for (const r of [rc, peds, tits, vis]) if (r.error) throw r.error;
 
+    const ultimos = ((peds.data ?? []) as Linha[]).slice(0, 10);
+    const { data: recusados, error: eRec } = ultimos.length
+      ? await this.sb.from('pedido_itens_sap').select('ordem').in('ordem', ultimos.map((p) => p.ordem as string)).not('recusa', 'is', null)
+      : { data: [] as Linha[], error: null };
+    if (eRec) throw eRec;
+    const comRecusa = new Set(((recusados ?? []) as Linha[]).map((r) => r.ordem as string));
+
     const rotas = [...new Set(((rc.data ?? []) as Linha[]).map((r) => r.rota as string))];
+    if (escopo && !rotas.some((r) => escopo.rotas.includes(r))) exigirRota(escopo, null);
     const vendedores = rotas.length ? await this.vendedoresDaRota(rotas[0]) : [];
 
     // compras por mes (sem os recusados)
@@ -302,8 +317,9 @@ export class ConsultaPainelService {
       visitas_na_semana: ((rc.data ?? []) as Linha[]).filter((r) => r.rota === rotas[0]).map((r) => ({ dia_semana: r.dia_semana, sequencia: r.sequencia })),
       compras_por_mes,
       total_12m: Math.round(lista.reduce((a, p) => a + Number(p.valor ?? 0), 0) * 100) / 100,
-      ultimos_pedidos: lista.slice(0, 10).map((p) => ({ ordem: p.ordem, dt_criacao: p.dt_criacao, valor: Number(p.valor ?? 0), status: p.status })),
-      titulos: { em_aberto: soma(abertos.filter((t) => t.status === 'Em aberto')), vencido: soma(abertos.filter((t) => t.status === 'Atrasado')), lista: abertos.slice(0, 30) },
+      // os 10 mais recentes, inclusive os recusados (os totais acima nao contam recusados), e se algum item foi recusado
+      ultimos_pedidos: ultimos.map((p) => ({ ordem: p.ordem, dt_criacao: p.dt_criacao, valor: Number(p.valor ?? 0), status: p.status, item_recusado: comRecusa.has(p.ordem as string) })),
+      titulos: { em_aberto: soma(abertos.filter((t) => t.status === 'Em aberto')), vencido: soma(abertos.filter((t) => t.status === 'Atrasado')), lista: abertos.slice(0, 30), recentes: titulos.slice(0, 10) },
       visitas: vis.data ?? [],
       produtos_mais_comprados: produtos,
     };

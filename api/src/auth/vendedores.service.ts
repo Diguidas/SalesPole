@@ -7,6 +7,8 @@ export interface VendedorLogado {
   codVendedor: string;
   /** null ate o primeiro sync do vendedor com o SAP */
   rota: string | null;
+  /** Preenchido quando um supervisor/gerente usa o app "como" este vendedor (modo equipe): quem esta de fato operando. */
+  equipe?: { papel: string; permissoes: string[] };
 }
 
 /** Codigo do vendedor sem zeros a esquerda (SAP devolve assim; o painel pode digitar com zeros). */

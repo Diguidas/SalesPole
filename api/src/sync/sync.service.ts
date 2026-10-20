@@ -1,6 +1,7 @@
 import { ConflictException, Inject, Injectable, Logger } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { normCod } from '../auth/vendedores.service';
+import { invalidarEscopo } from '../painel/escopo';
 import { SapClient } from '../sap/sap.client';
 import {
   SapClientesResp,
@@ -12,6 +13,7 @@ import {
   SapRemessasResp,
   SapTitulosResp,
   SapVendedorResp,
+  SapSupervisoresResp,
   SapVendedoresResp,
 } from '../sap/sap.types';
 import { SUPABASE } from '../supabase/supabase.module';
@@ -53,6 +55,11 @@ const coord = (s: string | undefined | null): number | null => {
 };
 /** '' vira null (colunas de texto opcionais). */
 const txt = (s: string | undefined | null): string | null => (s ?? '').trim() || null;
+/** Escritorio/equipe so entram no upsert quando o SAP manda o campo: sem ele, nao apaga o que ja foi gravado. */
+const escritorioEquipe = (v: { escritorio?: string; equipe?: string }) => ({
+  ...(v.escritorio !== undefined ? { escritorio: txt(v.escritorio) } : {}),
+  ...(v.equipe !== undefined ? { equipe: txt(v.equipe) } : {}),
+});
 /** So aceita AAAA-MM-DD (o ABAP ja entrega em ISO); senao null. */
 const dt = (s: string | undefined | null): string | null => (s && /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null);
 /** Data de hoje (+n dias) no fuso de Sao Paulo, AAAA-MM-DD. */
@@ -88,7 +95,7 @@ export class SyncService {
 
     await this.upsert(
       'vendedores',
-      [{ cod_vendedor: v.codvendedor, nome: v.nome, documento: v.documento, rota: v.rota, synced_at: inicio }],
+      [{ cod_vendedor: v.codvendedor, nome: v.nome, documento: v.documento, rota: v.rota, ...escritorioEquipe(v), synced_at: inicio }],
       'cod_vendedor',
     );
 
@@ -352,10 +359,10 @@ export class SyncService {
    * Lista de todos os vendedores com rota vigente no SAP, gravada em `vendedores`. Vendedor novo entra com
    * `indicadores = false` (o administrador marca no painel); quem ja existia mantem a marcacao.
    */
-  async importarVendedores(): Promise<{ total: number; novos: number }> {
+  async importarVendedores(): Promise<{ total: number; novos: number; supervisores: number | null }> {
     const r = await this.comTentativas(() => this.sap.get<SapVendedoresResp>('vendedores'));
     const lista = (r.vendedores ?? []).filter((v) => v.codvendedor?.trim());
-    if (!lista.length) return { total: 0, novos: 0 };
+    if (!lista.length) return { total: 0, novos: 0, supervisores: null };
 
     const codigos = lista.map((v) => normCod(v.codvendedor));
     const { data, error } = await this.sb.from('vendedores').select('cod_vendedor').in('cod_vendedor', codigos);
@@ -365,10 +372,44 @@ export class SyncService {
     // so cadastro: a carteira e os pedidos vem na sincronizacao. `indicadores` nao entra no upsert (preserva a marcacao)
     await this.upsert(
       'vendedores',
-      lista.map((v) => ({ cod_vendedor: normCod(v.codvendedor), nome: txt(v.nome), documento: txt(v.documento), rota: txt(v.rota) })),
+      lista.map((v) => ({ cod_vendedor: normCod(v.codvendedor), nome: txt(v.nome), documento: txt(v.documento), rota: txt(v.rota), ...escritorioEquipe(v) })),
       'cod_vendedor',
     );
-    return { total: lista.length, novos: codigos.filter((c) => !existentes.has(c)).length };
+    const supervisores = await this.importarSupervisores().catch((e) => {
+      // endpoint novo no SAP: se ainda nao existir/estiver ativo, o cadastro de vendedores nao pode falhar por isso
+      this.logger.warn(`Supervisores nao importados: ${(e as Error).message}`);
+      return null;
+    });
+    return { total: lista.length, novos: codigos.filter((c) => !existentes.has(c)).length, supervisores };
+  }
+
+  /**
+   * Supervisores vigentes (ZSDT087): supervisor + gerente por escritorio e equipe de vendas. A tabela inteira e a
+   * foto de hoje: o que nao veio mais (fim de vigencia, troca de supervisor) e removido.
+   */
+  async importarSupervisores(): Promise<number> {
+    const r = await this.comTentativas(() => this.sap.get<SapSupervisoresResp>('supervisores'));
+    const agora = new Date().toISOString();
+    const linhas = (r.supervisores ?? [])
+      .filter((x) => x.codsupervisor?.trim() && x.escritorio?.trim() && x.equipe?.trim())
+      .map((x) => ({
+        cod_supervisor: normCod(x.codsupervisor),
+        escritorio: x.escritorio.trim(),
+        equipe: x.equipe.trim(),
+        nome: txt(x.nome),
+        cod_gerente: txt(x.codgerente) ? normCod(x.codgerente) : null,
+        gerente_nome: txt(x.gerente_nome),
+        dt_inicio: dt(x.dt_inicio),
+        dt_fim: dt(x.dt_fim),
+        synced_at: agora,
+      }));
+    // resposta vazia nao apaga a base (SAP fora do ar ou tabela sem vigentes: melhor manter o ultimo retrato)
+    if (!linhas.length) return 0;
+    await this.upsert('supervisores', linhas, 'cod_supervisor,escritorio,equipe');
+    const { error } = await this.sb.from('supervisores').delete().lt('synced_at', agora);
+    if (error) throw error;
+    invalidarEscopo();
+    return linhas.length;
   }
 
   /**

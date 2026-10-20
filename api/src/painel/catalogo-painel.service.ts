@@ -1,3 +1,4 @@
+import { Escopo, exigirVendedor } from './escopo';
 import { Inject, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { normCod } from '../auth/vendedores.service';
@@ -74,7 +75,8 @@ export class CatalogoPainelService {
    * Preco e desconto de cada item para a quantidade informada: tabela do cliente, desconto automatico do incentivo
    * (quando atinge a faixa), o que o vendedor pode acrescentar e o preco final. `desconto_manual` e limitado ao permitido.
    */
-  async cotar(codVendedor: string, codCliente: string, itens: unknown) {
+  async cotar(codVendedor: string, codCliente: string, itens: unknown, escopo: Escopo | null = null) {
+    exigirVendedor(escopo, codVendedor);
     const lista = (Array.isArray(itens) ? itens : []).slice(0, 200) as Linha[];
     if (!lista.length) return { itens: [], total: 0, pedido_minimo: null };
     const ctx = await this.contextoCliente(codCliente, normCod(codVendedor));

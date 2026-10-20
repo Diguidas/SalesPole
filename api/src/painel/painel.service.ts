@@ -1,9 +1,11 @@
-import { ConflictException, Inject, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Inject, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE } from '../supabase/supabase.module';
 import { CADASTROS, PARAMETROS, STATUS_SAP_CONHECIDOS } from './cadastros';
 import { BUCKET_FOTOS } from '../visitas/visita.validacao';
 import { UsuarioPainel } from './painel.guard';
+import { Escopo, vendedorNoEscopo } from './escopo';
+import { normCod } from '../auth/vendedores.service';
 
 const STATUS_BONIFICACAO = ['aguardando_aprovacao', 'aprovado', 'rejeitado'];
 
@@ -12,15 +14,15 @@ export class PainelService {
   constructor(@Inject(SUPABASE) private readonly sb: SupabaseClient) {}
 
   /** Bonificacoes (padrao: aguardando aprovacao) com nome do cliente/vendedor, descricao dos produtos e tipo/centro. */
-  async bonificacoes(status = 'aguardando_aprovacao') {
+  async bonificacoes(escopo: Escopo | null, status = 'aguardando_aprovacao') {
     if (!STATUS_BONIFICACAO.includes(status)) throw new UnprocessableEntityException('status invalido');
-    const { data, error } = await this.sb
+    let consulta = this.sb
       .from('pedidos_app')
       .select('id, codigo, cod_vendedor, cod_cliente, tipo_bonificacao, centro_custo, justificativa, motivo_rejeicao, itens, recebido_em, decidido_por, decidido_em, status')
       .eq('tipo', 'bonificacao')
-      .eq('status', status)
-      .order('recebido_em', { ascending: status === 'aguardando_aprovacao' })
-      .limit(200);
+      .eq('status', status);
+    if (escopo) consulta = consulta.in('cod_vendedor', escopo.vendedores);
+    const { data, error } = await consulta.order('recebido_em', { ascending: status === 'aguardando_aprovacao' }).limit(200);
     if (error) throw error;
     const linhas = data ?? [];
     if (!linhas.length) return [];
@@ -63,7 +65,7 @@ export class PainelService {
     const m = (motivo ?? '').trim();
     if (!aprovar && (m.length < 3 || m.length > 200)) throw new UnprocessableEntityException('Informe o motivo da rejeicao (3 a 200 caracteres)');
 
-    const { data, error } = await this.sb
+    let decisao = this.sb
       .from('pedidos_app')
       .update({
         status: aprovar ? 'aprovado' : 'rejeitado',
@@ -73,9 +75,10 @@ export class PainelService {
       })
       .eq('id', id)
       .eq('tipo', 'bonificacao')
-      .eq('status', 'aguardando_aprovacao')
-      .select('id, codigo, status')
-      .maybeSingle();
+      .eq('status', 'aguardando_aprovacao');
+    // fora da equipe: age em nada (mesma resposta de "ja decidida")
+    if (u.escopo) decisao = decisao.in('cod_vendedor', u.escopo.vendedores);
+    const { data, error } = await decisao.select('id, codigo, status').maybeSingle();
     if (error) throw error;
     if (!data) throw new ConflictException('Esta bonificacao nao esta mais aguardando aprovacao');
 
@@ -98,19 +101,41 @@ export class PainelService {
   }
 
   /** Todas as linhas (inclusive inativas): o painel mostra e reativa. */
-  async listarCadastro(nome: string) {
+  async listarCadastro(nome: string, escopo: Escopo | null = null) {
     const c = this.cadastro(nome);
     let q = this.sb.from(c.tabela).select('*');
     for (const [col, asc] of c.ordem) q = q.order(col, { ascending: asc });
     const { data, error } = await q.limit(2000);
     if (error) throw error;
+    // quem so ve a propria equipe enxerga apenas os avisos dirigidos a vendedores dela
+    if (nome === 'avisos' && escopo) return (data ?? []).filter((a) => this.avisoDaEquipe(a as Record<string, unknown>, escopo));
     return data ?? [];
   }
 
+  /** Aviso para vendedor(es) todos dentro da equipe? */
+  private avisoDaEquipe(a: Record<string, unknown>, escopo: Escopo): boolean {
+    if (a.escopo !== 'vendedor') return false;
+    const cods = String(a.escopo_valor ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+    return cods.length > 0 && cods.every((c) => vendedorNoEscopo(escopo, c));
+  }
+
+  /** Barra mexer num aviso que nao e da equipe (o aviso existente e consultado antes de alterar). */
+  private async exigirAvisoDaEquipe(id: string, escopo: Escopo) {
+    if (!/^[0-9a-f-]{36}$/i.test(id)) throw new UnprocessableEntityException('id invalido');
+    const { data, error } = await this.sb.from('avisos').select('escopo, escopo_valor').eq('id', id).maybeSingle();
+    if (error) throw error;
+    if (!data || !this.avisoDaEquipe(data as Record<string, unknown>, escopo)) throw new ForbiddenException('Este aviso nao e da sua equipe');
+  }
+
   /** Cria ou atualiza. Com chave de texto (codigo/produto) e upsert; com `id` existente atualiza, sem `id` cria. */
-  async gravarCadastro(nome: string, corpo: Record<string, unknown>) {
+  async gravarCadastro(nome: string, corpo: Record<string, unknown>, escopo: Escopo | null = null) {
     const c = this.cadastro(nome);
     const linha = c.validar(corpo ?? {});
+    if (nome === 'avisos' && escopo) {
+      if (!this.avisoDaEquipe(linha as Record<string, unknown>, escopo)) throw new ForbiddenException('Voce so cria avisos para vendedores da sua equipe (escolha "Vendedor" e informe os codigos deles)');
+      const idAtual = corpo?.id ? String(corpo.id) : null;
+      if (idAtual) await this.exigirAvisoDaEquipe(idAtual, escopo);
+    }
     const agora = new Date().toISOString();
     if (c.chave === 'id') {
       const id = corpo?.id ? String(corpo.id) : null;
@@ -128,8 +153,9 @@ export class PainelService {
     return data;
   }
 
-  async ativarCadastro(nome: string, chave: string, ativo: boolean) {
+  async ativarCadastro(nome: string, chave: string, ativo: boolean, escopo: Escopo | null = null) {
     const c = this.cadastro(nome);
+    if (nome === 'avisos' && escopo) await this.exigirAvisoDaEquipe(chave, escopo);
     const { data, error } = await this.sb
       .from(c.tabela)
       .update({ ativo, updated_at: new Date().toISOString() })
@@ -149,7 +175,7 @@ export class PainelService {
    * Visitas do periodo (padrao: ultimos 7 dias) com vendedor, cliente, alertas e foto (link assinado de 10 min,
    * o bucket e privado). Alertas: fora do raio, GPS simulado, cliente sem coordenada e relogio do aparelho divergente.
    */
-  async visitas(f: { validacao?: string; ini?: string; fim?: string; vendedor?: string }) {
+  async visitas(escopo: Escopo | null, f: { validacao?: string; ini?: string; fim?: string; vendedor?: string }) {
     const validacao = f.validacao || 'pendente';
     if (!['pendente', 'validada', 'recusada', 'todas'].includes(validacao)) throw new UnprocessableEntityException('validacao invalida');
     const dia = /^\d{4}-\d{2}-\d{2}$/;
@@ -163,6 +189,7 @@ export class PainelService {
       .order('data_visita', { ascending: false });
     if (f.fim) q = q.lte('data_visita', f.fim);
     if (validacao !== 'todas') q = q.eq('validacao', validacao);
+    if (escopo) q = q.in('cod_vendedor', escopo.vendedores);
     if (f.vendedor) q = q.eq('cod_vendedor', f.vendedor.replace(/^0+/, '') || '0');
     const { data, error } = await q.limit(300);
     if (error) throw error;
@@ -208,14 +235,14 @@ export class PainelService {
     const o = (obs ?? '').trim();
     if (!validada && (o.length < 3 || o.length > 200)) throw new UnprocessableEntityException('Informe o motivo da recusa (3 a 200 caracteres)');
     if (o.length > 200) throw new UnprocessableEntityException('Observacao com no maximo 200 caracteres');
-    const { data, error } = await this.sb
+    let validar = this.sb
       .from('visitas')
       .update({ validacao: validada ? 'validada' : 'recusada', validada_por: u.email, validada_em: new Date().toISOString(), validacao_obs: o || null })
       .eq('id', id)
       .eq('status', 'concluida')
-      .eq('validacao', 'pendente')
-      .select('id, validacao')
-      .maybeSingle();
+      .eq('validacao', 'pendente');
+    if (u.escopo) validar = validar.in('cod_vendedor', u.escopo.vendedores);
+    const { data, error } = await validar.select('id, validacao').maybeSingle();
     if (error) throw error;
     if (!data) throw new ConflictException('Esta visita ainda nao foi concluida ou ja foi decidida');
     return data;

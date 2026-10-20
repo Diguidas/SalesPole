@@ -7,7 +7,21 @@ export interface SapCd {
 
 /** GET salespole_vendedores: todos os vendedores com rota vigente (painel gerencial). */
 export interface SapVendedoresResp {
-  vendedores: Array<{ codvendedor: string; nome: string; documento: string; rota: string }>;
+  vendedores: Array<{ codvendedor: string; nome: string; documento: string; rota: string; escritorio?: string; equipe?: string }>;
+}
+
+/** GET salespole_supervisores: supervisores vigentes por escritorio + equipe (ZSDT087). */
+export interface SapSupervisoresResp {
+  supervisores: Array<{
+    codsupervisor: string;
+    nome: string;
+    codgerente: string;
+    gerente_nome: string;
+    escritorio: string;
+    equipe: string;
+    dt_inicio: string;
+    dt_fim: string;
+  }>;
 }
 
 export interface SapVendedorResp {
@@ -15,6 +29,8 @@ export interface SapVendedorResp {
   nome: string;
   documento: string;
   rota: string;
+  escritorio?: string; // ZSDT005-VKBUR
+  equipe?: string; // ZSDT005-VKGRP
   clientes: Array<{
     codigocli: string;
     cnpjcpf: string;

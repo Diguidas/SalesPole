@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { BadGatewayException, Inject, Injectable, Logger, UnprocessableEntityException } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { normCod } from '../auth/vendedores.service';
+import { Escopo, exigirVendedor } from './escopo';
 import { PedidosService } from '../pedidos/pedidos.service';
 import { SUPABASE } from '../supabase/supabase.module';
 import { SyncService } from '../sync/sync.service';
@@ -25,8 +26,10 @@ export class PedidoPainelService {
   ) {}
 
   /** Vendedores com rota (so esses tem carteira para vender): para o seletor do formulario. */
-  async vendedores() {
-    const { data, error } = await this.sb.from('vendedores').select('cod_vendedor, nome, rota').not('rota', 'is', null).order('nome').limit(5000);
+  async vendedores(escopo: Escopo | null = null) {
+    let q = this.sb.from('vendedores').select('cod_vendedor, nome, rota').not('rota', 'is', null);
+    if (escopo) q = q.in('cod_vendedor', escopo.vendedores);
+    const { data, error } = await q.order('nome').limit(5000);
     if (error) throw error;
     return (data ?? []) as Linha[];
   }
@@ -35,7 +38,8 @@ export class PedidoPainelService {
    * Clientes da carteira do vendedor (busca por nome ou codigo; sem busca, os primeiros da rota).
    * `carteira_carregada = false`: o vendedor existe mas a carteira dele ainda nao veio do SAP (ver `carregarCarteira`).
    */
-  async clientes(codVendedor: string, q = ''): Promise<{ carteira_carregada: boolean; clientes: Linha[] }> {
+  async clientes(codVendedor: string, q = '', escopo: Escopo | null = null): Promise<{ carteira_carregada: boolean; clientes: Linha[] }> {
+    exigirVendedor(escopo, codVendedor);
     const rota = await this.rotaDe(codVendedor);
     const { data: algum, error: eAlgum } = await this.sb.from('rota_clientes').select('cod_cliente').eq('rota', rota).limit(1);
     if (eAlgum) throw eAlgum;
@@ -44,7 +48,8 @@ export class PedidoPainelService {
   }
 
   /** Traz do SAP a carteira (clientes e rota) de UM vendedor, sem esperar a sincronizacao das 7h/14h. */
-  async carregarCarteira(codVendedor: string) {
+  async carregarCarteira(codVendedor: string, escopo: Escopo | null = null) {
+    exigirVendedor(escopo, codVendedor);
     const cod = normCod(codVendedor);
     if (!/^\d+$/.test(cod) || cod === '0') throw new UnprocessableEntityException('Escolha o vendedor');
     try {
@@ -101,6 +106,7 @@ export class PedidoPainelService {
   async criar(u: UsuarioPainel, corpo: Record<string, any>) {
     const cod = normCod(String(corpo?.cod_vendedor ?? ''));
     if (!/^\d+$/.test(cod) || cod === '0') throw new UnprocessableEntityException('Escolha o vendedor');
+    exigirVendedor(u.escopo, cod);
     const rota = await this.rotaDe(cod);
 
     const itensIn = Array.isArray(corpo.itens) ? corpo.itens : [];

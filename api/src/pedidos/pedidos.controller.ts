@@ -1,10 +1,15 @@
-import { BadRequestException, Body, Controller, Param, ParseUUIDPipe, Post, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, ForbiddenException, Param, ParseUUIDPipe, Post, UseGuards } from '@nestjs/common';
 import { SupabaseAuthGuard } from '../auth/auth.guard';
 import { VendedorLogado } from '../auth/vendedor.decorator';
 import { VendedorLogado as Logado } from '../auth/vendedores.service';
 import { PedidosService } from './pedidos.service';
 
 const MAX_PEDIDOS_POR_PUSH = 50;
+
+/** Supervisor/gerente usando o app como um vendedor (modo equipe): so age se o admin liberou a permissao. */
+function exigirPermissaoEquipe(v: Logado, permissao: string) {
+  if (v.equipe && !v.equipe.permissoes.includes(permissao)) throw new ForbiddenException('Seu perfil nao tem permissao para esta acao');
+}
 /** Tempo maximo chamando o SAP dentro de uma requisicao; o resto fica para o job de retentativa. */
 const PRAZO_PUSH_MS = 25_000;
 
@@ -24,6 +29,7 @@ export class PedidosController {
    */
   @Post('push')
   async push(@VendedorLogado() v: Logado, @Body() body: { pedidos?: unknown[] }) {
+    exigirPermissaoEquipe(v, 'criar_pedido');
     const lista = body?.pedidos;
     if (!Array.isArray(lista) || lista.length === 0) {
       throw new BadRequestException('Envie { "pedidos": [ ... ] } com ao menos um pedido');
@@ -47,12 +53,14 @@ export class PedidosController {
    */
   @Post('sap/:ordem/cancelar')
   cancelarOrdem(@VendedorLogado() v: Logado, @Param('ordem') ordem: string, @Body() body: { motivo?: string }) {
+    exigirPermissaoEquipe(v, 'cancelar_pedido');
     return this.pedidos.cancelarOrdemSap(v, ordem, body?.motivo ?? null);
   }
 
   /** Reenvia um pedido em 'erro' depois que o vendedor corrigiu o problema. */
   @Post(':id/reenviar')
   reenviar(@VendedorLogado() v: Logado, @Param('id', new ParseUUIDPipe()) id: string) {
+    exigirPermissaoEquipe(v, 'criar_pedido');
     return this.pedidos.reenviar(v, id);
   }
 }

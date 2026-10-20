@@ -1,3 +1,4 @@
+import { Escopo } from './escopo';
 import { BadGatewayException, Inject, Injectable, UnprocessableEntityException } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { normCod } from '../auth/vendedores.service';
@@ -96,7 +97,7 @@ export class IndicadoresService {
    * Vendas do periodo (padrao: ultimos 12 meses) em R$, sem pedidos recusados, por mes, vendedor (rota),
    * escritorio e canal. `clientes` e a positivacao: clientes distintos que compraram no recorte.
    */
-  async vendas(ini?: string, fim?: string) {
+  async vendas(ini?: string, fim?: string, escopo: Escopo | null = null) {
     if ((ini && !DIA.test(ini)) || (fim && !DIA.test(fim))) throw new UnprocessableEntityException('datas devem ser AAAA-MM-DD');
     const hoje = hojeSp();
     const dFim = fim || hoje;
@@ -107,7 +108,7 @@ export class IndicadoresService {
     if (dIni > dFim) throw new UnprocessableEntityException('O inicio e depois do fim');
 
     // as quatro visoes numa so consulta (quatro em paralelo se atrapalhavam e estouravam o timeout do banco)
-    const { data: vendas, error: eVendas } = await this.sb.rpc('fn_indicadores_vendas_todas', { p_ini: dIni, p_fim: dFim });
+    const { data: vendas, error: eVendas } = await this.sb.rpc('fn_indicadores_vendas_todas', { p_ini: dIni, p_fim: dFim, p_rotas: escopo?.rotas ?? null });
     if (eVendas) throw new Error(`fn_indicadores_vendas_todas: ${eVendas.message}`);
     const consulta = (dim: string): Grupo[] =>
       ((vendas ?? []) as Linha[]).filter((x) => x.dim === dim).map((x) => ({ chave: x.chave ?? '', rotulo: x.rotulo ?? '', valor: Number(x.valor), pedidos: Number(x.pedidos), clientes: Number(x.clientes) }));
@@ -119,9 +120,9 @@ export class IndicadoresService {
     if (cart.error) throw new Error(`fn_indicadores_carteira: ${cart.error.message}`);
     if (ven.error) throw ven.error;
 
-    const tamanho = new Map(((cart.data ?? []) as Linha[]).map((c) => [c.rota, Number(c.clientes)]));
+    const tamanho = new Map(((cart.data ?? []) as Linha[]).filter((c) => !escopo || escopo.rotas.includes(c.rota)).map((c) => [c.rota, Number(c.clientes)]));
     const nomes = new Map<string, string[]>();
-    for (const v of (ven.data ?? []) as Linha[]) if (v.rota && v.nome) nomes.set(v.rota, [...(nomes.get(v.rota) ?? []), v.nome]);
+    for (const v of (ven.data ?? []) as Linha[]) if (v.rota && v.nome && (!escopo || escopo.rotas.includes(v.rota))) nomes.set(v.rota, [...(nomes.get(v.rota) ?? []), v.nome]);
 
     const total = rota.reduce((a, g) => ({ valor: a.valor + g.valor, pedidos: a.pedidos + g.pedidos, clientes: a.clientes + g.clientes }), { valor: 0, pedidos: 0, clientes: 0 });
     const carteira = [...tamanho.values()].reduce((a, n) => a + n, 0);

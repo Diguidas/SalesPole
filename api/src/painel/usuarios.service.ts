@@ -3,8 +3,13 @@ import { SupabaseClient } from '@supabase/supabase-js';
 import { normCod, VendedoresService } from '../auth/vendedores.service';
 import { SUPABASE } from '../supabase/supabase.module';
 import { UsuarioPainel } from './painel.guard';
+import { invalidarEscopo } from './escopo';
+import { ajustesDe, permissoesEfetivas } from './permissoes';
+import { PapelPainel } from './painel.guard';
 
-const PAPEIS = ['admin', 'aprovador', 'consulta'];
+const PAPEIS = ['admin', 'aprovador', 'consulta', 'supervisor', 'gerente', 'gerente_geral'];
+/** Papeis ligados a um codigo do SAP (supervisor/gerente: a equipe vem da ZSDT087). */
+const PAPEIS_SAP = ['supervisor', 'gerente'];
 const SENHA_MIN = 8;
 
 const erro = (m: string) => new UnprocessableEntityException(m);
@@ -50,9 +55,79 @@ export class UsuariosService {
   // ---------------- usuarios do painel ----------------
 
   async listarPainel() {
-    const { data, error } = await this.sb.from('usuarios_painel').select('email, nome, papel, ativo, created_at').order('email');
+    const { data, error } = await this.sb.from('usuarios_painel').select('email, nome, papel, cod_sap, permissoes, ativo, created_at').order('email');
     if (error) throw error;
-    return data ?? [];
+    // devolve as permissoes ja resolvidas (padrao do papel + ajustes) para a tela marcar as caixas
+    return (data ?? []).map((u: { papel: PapelPainel; permissoes: unknown }) => ({ ...u, permissoes: permissoesEfetivas(u.papel, u.permissoes) }));
+  }
+
+  /**
+   * Supervisores e gerentes que vieram do SAP (ZSDT087), com as equipes, o numero de vendedores e se ja tem acesso ao painel.
+   * Base da tela de usuarios: o admin escolhe um deles e cria o login.
+   */
+  async listarSupervisoresSap() {
+    const [sup, ven, acessos] = await Promise.all([
+      this.sb.from('supervisores').select('cod_supervisor, nome, cod_gerente, gerente_nome, escritorio, equipe').limit(5000),
+      this.sb.from('vendedores').select('escritorio, equipe').not('escritorio', 'is', null).limit(10000),
+      this.sb.from('usuarios_painel').select('email, papel, cod_sap, ativo').not('cod_sap', 'is', null),
+    ]);
+    for (const r of [sup, ven, acessos]) if (r.error) throw r.error;
+    const linhas = (sup.data ?? []) as Array<{ cod_supervisor: string; nome: string | null; cod_gerente: string | null; gerente_nome: string | null; escritorio: string; equipe: string }>;
+
+    const porEquipe = new Map<string, number>();
+    for (const v of (ven.data ?? []) as Array<{ escritorio: string; equipe: string }>) {
+      const k = `${v.escritorio}|${v.equipe}`;
+      porEquipe.set(k, (porEquipe.get(k) ?? 0) + 1);
+    }
+    // acesso pelo codigo SAP, qualquer que seja o papel (um supervisor promovido a admin continua aparecendo como tendo acesso)
+    const acesso = (_tipo: string, cod: string) => {
+      const a = ((acessos.data ?? []) as Array<{ email: string; papel: string; cod_sap: string; ativo: boolean }>).find((x) => normCod(x.cod_sap) === cod);
+      return a ? { email: a.email, ativo: a.ativo, papel: a.papel } : null;
+    };
+
+    const supervisores = new Map<string, { cod: string; nome: string | null; gerente: string | null; equipes: Array<{ escritorio: string; equipe: string }> }>();
+    const gerentes = new Map<string, { cod: string; nome: string | null; supervisores: Set<string>; equipes: Set<string> }>();
+    for (const l of linhas) {
+      const s = supervisores.get(l.cod_supervisor) ?? { cod: l.cod_supervisor, nome: l.nome, gerente: l.gerente_nome, equipes: [] };
+      s.equipes.push({ escritorio: l.escritorio, equipe: l.equipe });
+      supervisores.set(l.cod_supervisor, s);
+      if (l.cod_gerente) {
+        const g = gerentes.get(l.cod_gerente) ?? { cod: l.cod_gerente, nome: l.gerente_nome, supervisores: new Set<string>(), equipes: new Set<string>() };
+        g.supervisores.add(l.cod_supervisor);
+        g.equipes.add(`${l.escritorio}|${l.equipe}`);
+        gerentes.set(l.cod_gerente, g);
+      }
+    }
+    const soma = (pares: string[]) => pares.reduce((a, k) => a + (porEquipe.get(k) ?? 0), 0);
+    const nomeOrd = (a: { nome: string | null }, b: { nome: string | null }) => String(a.nome ?? '').localeCompare(String(b.nome ?? ''), 'pt-BR');
+    return {
+      supervisores: [...supervisores.values()]
+        .map((s) => ({ cod: s.cod, nome: s.nome, gerente: s.gerente, equipes: s.equipes, vendedores: soma(s.equipes.map((e) => `${e.escritorio}|${e.equipe}`)), acesso: acesso('supervisor', s.cod) }))
+        .sort(nomeOrd),
+      gerentes: [...gerentes.values()]
+        .map((g) => ({ cod: g.cod, nome: g.nome, supervisores: g.supervisores.size, vendedores: soma([...g.equipes]), acesso: acesso('gerente', g.cod) }))
+        .sort(nomeOrd),
+    };
+  }
+
+  /**
+   * Muda so o papel de quem ja tem acesso (ex.: promover um gerente a gerente geral ou a administrador), mantendo nome,
+   * codigo SAP, situacao e as permissoes ajustadas. Os mesmos cuidados do cadastro: sempre sobra um admin ativo.
+   */
+  async mudarPapel(atual: UsuarioPainel, emailAlvo: string, papelNovo: string) {
+    const e = email(emailAlvo);
+    if (!PAPEIS.includes(papelNovo)) throw erro('Papel invalido');
+    const { data: u, error } = await this.sb.from('usuarios_painel').select('email, nome, papel, cod_sap, ativo').eq('email', e).maybeSingle();
+    if (error) throw error;
+    if (!u) throw erro('Usuario nao encontrado');
+    if (PAPEIS_SAP.includes(papelNovo) && !u.cod_sap) throw erro('Supervisor e gerente precisam do codigo SAP: edite o usuario e informe');
+    if (e === atual.email && papelNovo !== 'admin') throw new ConflictException('Voce nao pode remover o seu proprio acesso de administrador');
+    if (papelNovo !== 'admin') await this.garantirOutroAdmin(e);
+    const { error: e2 } = await this.sb.from('usuarios_painel').update({ papel: papelNovo }).eq('email', e);
+    if (e2) throw e2;
+    invalidarEscopo();
+    this.logger.log(`Papel de ${e}: ${u.papel} -> ${papelNovo} por ${atual.email}`);
+    return { email: e, papel: papelNovo };
   }
 
   async gravarPainel(atual: UsuarioPainel, b: Record<string, unknown>) {
@@ -62,16 +137,25 @@ export class UsuariosService {
     const nome = String(b.nome ?? '').trim().slice(0, 80) || null;
     const ativo = b.ativo == null ? true : b.ativo === true;
     const senha = typeof b.senha === 'string' && b.senha ? b.senha : null;
+    // codigo SAP: obrigatorio para supervisor/gerente; nos demais papeis (ex.: um supervisor promovido a admin) fica guardado se informado
+    let cod_sap: string | null = null;
+    const codInformado = String(b.cod_sap ?? '').trim();
+    if (PAPEIS_SAP.includes(papel) || codInformado) {
+      if (!/^\d{1,10}$/.test(codInformado)) throw erro('Informe o codigo SAP (apenas numeros) do supervisor/gerente');
+      cod_sap = normCod(codInformado);
+    }
+    const marcadas = b.permissoes && typeof b.permissoes === 'object' && !Array.isArray(b.permissoes) ? b.permissoes : Array.isArray(b.permissoes) ? Object.fromEntries((b.permissoes as unknown[]).map((k) => [String(k), true])) : null;
 
     // nao deixa o painel sem nenhum admin ativo (nem o admin se trancar para fora)
     if (e === atual.email && (!ativo || papel !== 'admin')) throw new ConflictException('Voce nao pode remover o seu proprio acesso de administrador');
     if (!ativo || papel !== 'admin') await this.garantirOutroAdmin(e);
 
     const login = senha ? await this.definirSenha(e, senha) : null; // senha invalida falha antes de gravar o acesso
-    const { error } = await this.sb.from('usuarios_painel').upsert({ email: e, nome, papel, ativo }, { onConflict: 'email' });
+    const { error } = await this.sb.from('usuarios_painel').upsert({ email: e, nome, papel, ativo, cod_sap, permissoes: ajustesDe(papel as PapelPainel, marcadas ?? Object.fromEntries(permissoesEfetivas(papel as PapelPainel, {}).map((k) => [k, true]))) }, { onConflict: 'email' });
     if (error) throw error;
+    invalidarEscopo();
     if (login) this.logger.log(`Login ${login} para ${e} (painel) por ${atual.email}`);
-    return { email: e, nome, papel, ativo, login };
+    return { email: e, nome, papel, cod_sap, ativo, login };
   }
 
   private async garantirOutroAdmin(emailAlvo: string) {
