@@ -12,12 +12,15 @@ import { IndicadoresService } from './indicadores.service';
 import { MonitorService } from './monitor.service';
 import { PainelService } from './painel.service';
 import { SincronizacaoService } from './sincronizacao.service';
+import { CombosService } from './combos.service';
+import { SolicitacoesController } from './solicitacoes.controller';
+import { SolicitacoesService } from './solicitacoes.service';
 import { UsuariosService } from './usuarios.service';
 import { ProdutosPainelService } from './produtos-painel.service';
 
 @Module({
   imports: [PedidosModule, SyncModule],
-  controllers: [PainelController, EquipeController],
-  providers: [EquipeService, PainelService, PainelGuard, UsuariosService, MonitorService, SincronizacaoService, IndicadoresService, PedidoPainelService, CatalogoPainelService, ConsultaPainelService, ProdutosPainelService],
+  controllers: [PainelController, EquipeController, SolicitacoesController],
+  providers: [CombosService, SolicitacoesService, EquipeService, PainelService, PainelGuard, UsuariosService, MonitorService, SincronizacaoService, IndicadoresService, PedidoPainelService, CatalogoPainelService, ConsultaPainelService, ProdutosPainelService],
 })
 export class PainelModule {}

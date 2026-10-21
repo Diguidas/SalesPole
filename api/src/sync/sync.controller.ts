@@ -108,6 +108,22 @@ export class SyncController {
         (r.escopo !== 'vendedor' || r.escopo_valor === v.codVendedor),
     );
 
+    // combos (tela Desconto do painel): vigentes hoje; os de vendedor so do vendedor logado; cliente/canal/escritorio o app confere na hora
+    const combosBrutos = (await this.sb
+      .from('combos')
+      .select('id, nome, escopo, escopo_valor, beneficio, brinde_cod_produto, brinde_qtd, desconto_pct, desconto_extra_max_pct, repete, max_repeticoes, vigencia_ini, vigencia_fim')
+      .eq('ativo', true)
+      .then(this.ok)) as Array<{ id: string; escopo: string; escopo_valor: string | null; vigencia_ini: string | null; vigencia_fim: string | null }>;
+    const itensCombos = (await this.sb.from('combo_itens').select('combo_id, alvo_tipo, alvo_valor, qtd_minima').then(this.ok)) as Array<{ combo_id: string }>;
+    const combos = combosBrutos
+      .filter(
+        (c) =>
+          (!c.vigencia_ini || c.vigencia_ini <= hojeIso) &&
+          (!c.vigencia_fim || c.vigencia_fim >= hojeIso) &&
+          (c.escopo !== 'vendedor' || (c.escopo_valor ?? '').split(',').includes(v.codVendedor)),
+      )
+      .map((c) => ({ ...c, itens: itensCombos.filter((i) => i.combo_id === c.id) }));
+
     // perguntas da visita: as do vendedor logado e as gerais; escritorio/canal/cliente o app filtra pelo cliente visitado
     const perguntas = (
       (await this.sb
@@ -160,6 +176,7 @@ export class SyncController {
       centros_custo: centrosCusto,
       destaques,
       incentivos,
+      combos,
       feriados,
       visitas,
       visita_perguntas: perguntas,

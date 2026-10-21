@@ -208,7 +208,7 @@ export interface SapCriarPedidoResp {
   parcial: string; // 'true' quando so parte das ordens (FERT/HAWA) foi criada
   codigo_interno: string;
   dt_entrega: string; // data de entrega calculada pelo SAP (AAAA-MM-DD)
-  ordens: Array<{ ordem: string; tipo_material: string; vkorg: string; duplicado: string }>;
+  ordens: Array<{ ordem: string; tipo_material: string; vkorg: string; duplicado: string; bonificacao?: string }>;
   mensagens: Array<{ tipo: string; mensagem: string }>;
   erro?: string; // respostas de erro simples do dispatcher ({ "erro": "..." })
 }

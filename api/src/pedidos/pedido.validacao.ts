@@ -8,6 +8,12 @@ export interface ItemEntrada {
   /** so para o PDF de confirmacao: preco de tabela por caixa e desconto (%) no momento do envio; nao vai ao SAP */
   preco_tabela?: string | null;
   desconto?: number | null;
+  /** brinde de combo: vai ao SAP com preco zero; o servidor confere se algum combo do pedido o sustenta */
+  brinde?: boolean;
+  combo_id?: string | null;
+  /** bonificacao do brinde (preenchidos pelo servidor a partir do combo): ORD_REASON e centro de custo */
+  tipo_bonificacao?: string | null;
+  centro_custo?: string | null;
 }
 
 export interface PedidoEntrada {
@@ -98,18 +104,21 @@ export function validarPedido(raw: unknown): ResultadoValidacao {
     const produto = texto(x.produto, 18);
     const unidade = texto(x.unidade, 3)?.toUpperCase() ?? null;
     const quantidade = decimal(x.quantidade, 3, 1_000_000);
-    const preco = x.preco === undefined || x.preco === null || x.preco === '' ? null : decimal(x.preco, 4, 10_000_000);
+    const brinde = x.brinde === true;
+    // brinde nao tem preco (zero): ignora qualquer valor enviado
+    const preco = brinde || x.preco === undefined || x.preco === null || x.preco === '' ? null : decimal(x.preco, 4, 10_000_000);
 
     if (!produto || !/^[\w.-]+$/.test(produto)) erros.push(`itens[${i}].produto invalido`);
     if (!unidade || !/^[A-Z0-9]+$/.test(unidade)) erros.push(`itens[${i}].unidade invalida`);
     if (!quantidade) erros.push(`itens[${i}].quantidade deve ser > 0 (ate 3 casas)`);
-    if (x.preco !== undefined && x.preco !== null && x.preco !== '' && !preco) erros.push(`itens[${i}].preco invalido`);
+    if (!brinde && x.preco !== undefined && x.preco !== null && x.preco !== '' && !preco) erros.push(`itens[${i}].preco invalido`);
 
     const precoTabela = x.preco_tabela === undefined || x.preco_tabela === null || x.preco_tabela === '' ? null : decimal(x.preco_tabela, 4, 10_000_000);
     const descNum = Number(x.desconto);
     const desconto = x.desconto === undefined || x.desconto === null || !Number.isFinite(descNum) || descNum <= 0 || descNum > 100 ? null : Math.round(descNum * 100) / 100;
 
-    if (produto && unidade && quantidade) itens.push({ produto, unidade, quantidade, preco, preco_tabela: precoTabela, desconto });
+    const comboId = brinde ? texto(x.combo_id, 40) : null;
+    if (produto && unidade && quantidade) itens.push({ produto, unidade, quantidade, preco, preco_tabela: precoTabela, desconto, ...(brinde ? { brinde: true, combo_id: comboId } : {}) });
   });
 
   if (erros.length) return { ok: false, id: UUID.test(id) ? id : null, erros };
@@ -138,7 +147,7 @@ export function validarPedido(raw: unknown): ResultadoValidacao {
 /** Impressao digital do pedido (cliente + itens), usada para detectar duplicidade. */
 export function hashItens(codCliente: string, itens: ItemEntrada[]): string {
   const linhas = itens
-    .map((i) => `${i.produto}:${i.unidade}:${i.quantidade}:${i.preco ?? ''}`)
+    .map((i) => `${i.produto}:${i.unidade}:${i.quantidade}:${i.preco ?? ''}${i.brinde ? ':brinde' : ''}`)
     .sort();
   return createHash('sha1').update(`${codCliente}|${linhas.join('|')}`).digest('hex');
 }

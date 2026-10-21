@@ -1,6 +1,7 @@
 import {
   BadGatewayException, ConflictException, ForbiddenException, Inject, Injectable, Logger, NotFoundException, UnprocessableEntityException,
 } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { normCod, VendedorLogado } from '../auth/vendedores.service';
 import { SapClient } from '../sap/sap.client';
@@ -10,7 +11,16 @@ import { classificar, Desfecho, MAX_TENTATIVAS, OrdemSap, proximaTentativa } fro
 import { conferirPreco, tabelaDoItem, type DadosProdutoSrv, type LinhaPrecoSrv } from './pedido.preco';
 import { aposCorte, feriadosDoLocal, type FeriadoRow } from './pedido.entrega';
 import { descontoLiberadoPeloIncentivo, incentivoAplicavel, type IncentivoRow } from './pedido.incentivo';
+import { avaliarCombosSrv, conferirBrindes, type ComboRow } from './pedido.combo';
 import { hashItens, PedidoEntrada, validarPedido } from './pedido.validacao';
+
+/** Brindes de combo com o mesmo tipo de bonificacao e centro de custo: viram UMA ordem de bonificacao (Z011) no mesmo envio da venda. */
+export interface PlanoBonificacao {
+  tipo_bonificacao: string;
+  centro_custo: string;
+  combos: string[];
+  itens: Array<{ produto: string; unidade: string; quantidade: string; preco: string | null }>;
+}
 
 export interface PedidoRow {
   id: string;
@@ -28,7 +38,7 @@ export interface PedidoRow {
   centro_custo: string | null;
   justificativa: string | null;
   motivo_rejeicao: string | null;
-  itens: Array<{ produto: string; unidade: string; quantidade: string; preco: string | null; preco_tabela?: string | null; desconto?: number | null }>;
+  itens: Array<{ produto: string; unidade: string; quantidade: string; preco: string | null; preco_tabela?: string | null; desconto?: number | null; brinde?: boolean; combo_id?: string | null; tipo_bonificacao?: string | null; centro_custo?: string | null }>;
   itens_hash: string;
   status: string;
   ordens_sap: OrdemSap[];
@@ -96,8 +106,10 @@ export class PedidosService {
       novo = true;
       const errosBonif = await this.conferirBonificacao(p);
       if (errosBonif.length) return { id: p.id, status: 'invalido', erros: errosBonif };
-      const errosPreco = await this.conferirDescontos(p, codCliente, v.codVendedor);
-      if (errosPreco.length) return { id: p.id, status: 'invalido', erros: errosPreco };
+      const conf = await this.conferirDescontos(p, codCliente, v.codVendedor);
+      if (conf.erros.length) return { id: p.id, status: 'invalido', erros: conf.erros };
+      // as linhas de brinde passam a carregar o tipo e o centro de custo da bonificacao (o ABAP cria a ordem Z011 por grupo)
+      if (conf.itens) p.itens = conf.itens;
       await this.inserir(v, p, codCliente);
       row = await this.buscar(p.id);
       if (!row) throw new Error('pedido nao encontrado apos inserir');
@@ -135,9 +147,9 @@ export class PedidosService {
     return erros;
   }
 
-  async conferirDescontos(p: PedidoEntrada, codCliente: string, codVendedor: string): Promise<string[]> {
-    const comPreco = p.itens.filter((i) => i.preco !== null);
-    if (!comPreco.length) return [];
+  async conferirDescontos(p: PedidoEntrada, codCliente: string, codVendedor: string): Promise<{ erros: string[]; itens?: PedidoEntrada['itens'] }> {
+    const comPreco = p.itens.filter((i) => i.preco !== null && !i.brinde);
+    if (!comPreco.length && !p.itens.some((i) => i.brinde)) return { erros: [] };
 
     const { data: cli, error: eCli } = await this.sb.from('clientes').select('areas').eq('cod_cliente', codCliente).maybeSingle();
     if (eCli) throw eCli;
@@ -146,7 +158,7 @@ export class PedidosService {
       canal?: { codigo?: string } | null; escritorio?: { codigo?: string } | null;
     }>;
 
-    const codigos = [...new Set(comPreco.map((i) => i.produto))];
+    const codigos = [...new Set(p.itens.map((i) => i.produto))];
     const { data: prods, error: eProd } = await this.sb.from('produtos').select('cod_produto,tipo_material,dados').in('cod_produto', codigos);
     if (eProd) throw eProd;
     const porProduto = new Map(
@@ -168,8 +180,35 @@ export class PedidosService {
       hoje: dataSP(new Date().toISOString()),
     };
 
+    // combos (condicao no pedido -> brinde / desconto): o brinde enviado precisa caber no que os combos do pedido dao
+    const [{ data: cmb, error: eCmb }, { data: cmbItens, error: eCmbI }] = await Promise.all([
+      this.sb
+        .from('combos')
+        .select('id,nome,escopo,escopo_valor,beneficio,brinde_cod_produto,brinde_qtd,tipo_bonificacao,centro_custo,desconto_pct,desconto_extra_max_pct,repete,max_repeticoes,vigencia_ini,vigencia_fim,ativo')
+        .eq('ativo', true),
+      this.sb.from('combo_itens').select('combo_id,alvo_tipo,alvo_valor,qtd_minima'),
+    ]);
+    if (eCmb) throw eCmb;
+    if (eCmbI) throw eCmbI;
+    const combos = ((cmb ?? []) as Array<Omit<ComboRow, 'itens'>>).map((c) => ({
+      ...c,
+      itens: ((cmbItens ?? []) as Array<{ combo_id: string; alvo_tipo: string; alvo_valor: string; qtd_minima: number }>).filter((x) => x.combo_id === c.id),
+    }));
+    const classificacoes = Object.fromEntries([...porProduto].map(([k, x]) => [k, x.dados?.classificacao]));
+    const doCombo = avaliarCombosSrv(
+      combos,
+      p.itens.filter((i) => !i.brinde).map((i) => ({ produto: i.produto, quantidade: Number(i.quantidade) })),
+      ctxInc,
+      classificacoes,
+    );
+    const brindesDoPedido = p.itens.filter((i) => i.brinde);
+    const errosBrinde = conferirBrindes(brindesDoPedido.map((i) => ({ produto: i.produto, quantidade: Number(i.quantidade) })), doCombo);
+    if (brindesDoPedido.length && p.tipo === 'bonificacao') errosBrinde.push('combo nao vale em pedido de bonificacao');
+    const plano = this.planoDaBonificacao(brindesDoPedido, doCombo.brindesPorCombo, errosBrinde);
+    const itensFinais = plano.length ? this.itensComBonificacao(p.itens, plano) : undefined;
+
     const pltyps = [...new Set(areas.map((a) => a.lista_preco?.codigo).filter((x): x is string => !!x))];
-    if (!pltyps.length) return [];
+    if (!pltyps.length) return { erros: errosBrinde, itens: itensFinais };
     const [{ data: g, error: eG }, { data: l, error: eL }] = await Promise.all([
       this.sb.from('precos_grupo').select('pltyp,kdgrp,cod_produto,kbetr,kpein,kmein,datab,datbi,desconto_max').in('cod_produto', codigos).in('pltyp', pltyps),
       this.sb.from('precos_lista').select('pltyp,cod_produto,kbetr,kpein,kmein,datab,datbi,desconto_max').in('cod_produto', codigos).in('pltyp', pltyps),
@@ -181,7 +220,7 @@ export class PedidosService {
     const listas = (l ?? []) as Base[];
 
     const hoje = dataSP(new Date().toISOString());
-    const erros: string[] = [];
+    const erros: string[] = [...errosBrinde];
     for (const i of comPreco) {
       const prod = porProduto.get(i.produto);
       if (!prod) continue;
@@ -198,11 +237,60 @@ export class PedidosService {
         prod.dados ?? {},
       );
       if (!tabela) continue;
-      const extra = descontoLiberadoPeloIncentivo(incentivoAplicavel(incentivos, i.produto, Number(i.quantidade), ctxInc, prod.dados?.classificacao));
+      const extraInc = descontoLiberadoPeloIncentivo(incentivoAplicavel(incentivos, i.produto, Number(i.quantidade), ctxInc, prod.dados?.classificacao));
+      const dc = doCombo.descontoPorProduto[i.produto];
+      // combo e incentivo no mesmo produto: vale o que libera mais desconto
+      const extra = Math.max(extraInc, dc ? dc.pct + dc.extra : 0);
       const msg = conferirPreco(Number(i.preco), { ...tabela, descontoMax: tabela.descontoMax + extra });
       if (msg) erros.push(`produto ${i.produto}: ${msg}. Sincronize para atualizar os precos.`);
     }
-    return erros;
+    return { erros, itens: itensFinais };
+  }
+
+  /** Troca as linhas de brinde do pedido pelas do plano: uma por produto e grupo (tipo de bonificacao + centro de custo). */
+  private itensComBonificacao(itens: PedidoEntrada['itens'], plano: PlanoBonificacao[]): PedidoEntrada['itens'] {
+    const brindes = plano.flatMap((g) =>
+      g.itens.map((i) => ({
+        produto: i.produto, unidade: i.unidade, quantidade: i.quantidade, preco: null, preco_tabela: i.preco, desconto: 100,
+        brinde: true, combo_id: null, tipo_bonificacao: g.tipo_bonificacao, centro_custo: g.centro_custo,
+      })),
+    );
+    return [...itens.filter((i) => !i.brinde), ...brindes];
+  }
+
+  /**
+   * Agrupa os brindes do pedido por (tipo de bonificacao, centro de custo) do combo que os deu. Cada grupo vira um
+   * pedido de bonificacao automatico. Quantidade e preco (tabela, so informativo) vem das linhas de brinde do pedido.
+   */
+  private planoDaBonificacao(
+    brindes: PedidoEntrada['itens'],
+    grants: Array<{ comboNome: string; produto: string; quantidade: number; tipo_bonificacao: string | null; centro_custo: string | null }>,
+    erros: string[],
+  ): PlanoBonificacao[] {
+    const restante = new Map<string, { qtd: number; unidade: string; preco: string | null }>();
+    for (const b of brindes) {
+      const a = restante.get(b.produto);
+      restante.set(b.produto, { qtd: (a?.qtd ?? 0) + Number(b.quantidade), unidade: a?.unidade ?? b.unidade, preco: a?.preco ?? b.preco_tabela ?? null });
+    }
+    const grupos = new Map<string, PlanoBonificacao>();
+    for (const g of grants) {
+      const r = restante.get(g.produto);
+      if (!r || r.qtd <= 0) continue;
+      const q = Math.min(g.quantidade, r.qtd);
+      if (!g.tipo_bonificacao || !g.centro_custo) {
+        erros.push(`combo "${g.comboNome}" sem tipo/centro de custo de bonificacao: edite o combo no painel`);
+        continue;
+      }
+      r.qtd -= q;
+      const chave = `${g.tipo_bonificacao}|${g.centro_custo}`;
+      const grupo = grupos.get(chave) ?? { tipo_bonificacao: g.tipo_bonificacao, centro_custo: g.centro_custo, combos: [], itens: [] };
+      if (!grupo.combos.includes(g.comboNome)) grupo.combos.push(g.comboNome);
+      const item = grupo.itens.find((i) => i.produto === g.produto);
+      if (item) item.quantidade = String(Number(item.quantidade) + q);
+      else grupo.itens.push({ produto: g.produto, unidade: r.unidade, quantidade: String(q), preco: r.preco });
+      grupos.set(chave, grupo);
+    }
+    return [...grupos.values()];
   }
 
   /**
@@ -299,6 +387,9 @@ export class PedidosService {
       http = r.status;
       mensagens = r.data.mensagens;
       desfecho = classificar(r.status, r.data);
+      // venda criada: o brinde de combo segue como ORDEM DE BONIFICACAO do mesmo pedido (uma por tipo + centro de custo)
+      const grupos = this.gruposBonificacao(row);
+      if (desfecho.tipo === 'ok' && grupos.length) desfecho = await this.enviarBonificacoes(row, grupos, desfecho);
     } catch (e) {
       // rede, timeout, resposta que nao e JSON (ex.: pagina de erro/401 do SAP)
       desfecho = { tipo: 'transitorio', erro: e instanceof Error ? e.message.slice(0, 1000) : String(e) };
@@ -336,7 +427,8 @@ export class PedidosService {
     }
   }
 
-  private async corpoSap(row: PedidoRow) {
+  /** Campos comuns da venda e das ordens de bonificacao do combo. */
+  private async corpoBase(row: PedidoRow) {
     return {
       codvendedor: row.cod_vendedor,
       codigocli: row.cod_cliente,
@@ -350,17 +442,79 @@ export class PedidosService {
       // pedido feito depois da hora de corte (17h) conta como do dia seguinte; entrega nunca cai em feriado
       apos_corte: aposCorte(row.criado_no_app_em) ? 'true' : 'false',
       feriados: await this.feriadosDoCliente(row),
+    };
+  }
+
+  private async corpoSap(row: PedidoRow) {
+    return {
+      ...(await this.corpoBase(row)),
       // bonificacao: o SAP cria a ordem Z011 com tipo (ORD_REASON) e centro de custo. A justificativa NAO vai.
       tipo: row.tipo ?? 'venda',
       tipo_bonificacao: row.tipo === 'bonificacao' ? (row.tipo_bonificacao ?? '') : '',
       centro_custo: row.tipo === 'bonificacao' ? (row.centro_custo ?? '') : '',
-      itens: row.itens.map((i) => ({
+      // o brinde de combo NAO vai na venda: vai na(s) ordem(ns) de bonificacao (ver enviarBonificacoes)
+      itens: row.itens.filter((i) => !i.brinde).map((i) => ({
         produto: i.produto,
         unidade: i.unidade,
         quantidade: i.quantidade,
         preco: i.preco ?? '',
       })),
     };
+  }
+
+  /** Brindes de combo do pedido agrupados por (tipo de bonificacao + centro de custo), sempre na mesma ordem. */
+  private gruposBonificacao(row: PedidoRow): Array<{ tipo: string; centro: string; itens: Array<{ produto: string; unidade: string; quantidade: string; preco: string }> }> {
+    const mapa = new Map<string, { tipo: string; centro: string; itens: Array<{ produto: string; unidade: string; quantidade: string; preco: string }> }>();
+    for (const i of row.itens.filter((x) => x.brinde)) {
+      const tipo = i.tipo_bonificacao ?? '';
+      const centro = i.centro_custo ?? '';
+      const g = mapa.get(`${tipo}|${centro}`) ?? { tipo, centro, itens: [] };
+      // preco = tabela (so informativo: a ordem de bonificacao nao cobra), como nas bonificacoes feitas a mao
+      g.itens.push({ produto: i.produto, unidade: i.unidade, quantidade: i.quantidade, preco: i.preco_tabela ?? '' });
+      mapa.set(`${tipo}|${centro}`, g);
+    }
+    return [...mapa.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, g]) => g);
+  }
+
+  /**
+   * Cria no SAP a ordem de bonificacao de cada grupo de brindes, DEPOIS da venda. O codigo interno de cada uma e o do pedido
+   * + B1, B2... (o SAP nao duplica por esse codigo, entao repetir o envio so cria a que falta). Se uma falhar, o pedido
+   * fica 'parcial' com as ordens ja criadas e o job repete.
+   */
+  private async enviarBonificacoes(
+    row: PedidoRow,
+    grupos: ReturnType<PedidosService['gruposBonificacao']>,
+    venda: Extract<Desfecho, { tipo: 'ok' }>,
+  ): Promise<Desfecho> {
+    const ordens = [...venda.ordens];
+    const bonif = (os: OrdemSap[]) => os.map((o) => ({ ...o, bonificacao: true }));
+    for (const [n, g] of grupos.entries()) {
+      let d: Desfecho;
+      try {
+        const corpo = {
+          ...(await this.corpoBase(row)),
+          codigo_interno: `${row.codigo}B${n + 1}`,
+          dt_entrega: venda.dtEntrega ?? row.dt_entrega ?? '', // a mesma data que o SAP deu para a venda
+          ordem_compra_cliente: '',
+          observacao: `Brinde do combo (pedido ${row.codigo})`,
+          tipo: 'bonificacao',
+          tipo_bonificacao: g.tipo,
+          centro_custo: g.centro,
+          itens: g.itens,
+        };
+        const r = await this.sap.postComStatus<SapCriarPedidoResp>('criar_pedido', corpo);
+        d = classificar(r.status, r.data);
+      } catch (e) {
+        d = { tipo: 'transitorio', erro: e instanceof Error ? e.message.slice(0, 1000) : String(e) };
+      }
+      if (d.tipo === 'ok') {
+        ordens.push(...bonif(d.ordens));
+        continue;
+      }
+      if (d.tipo === 'parcial') ordens.push(...bonif(d.ordens));
+      return { tipo: 'parcial', ordens, dtEntrega: venda.dtEntrega, erro: `Bonificacao do combo: ${d.erro}` };
+    }
+    return { tipo: 'ok', ordens, dtEntrega: venda.dtEntrega };
   }
 
   private async aplicar(row: PedidoRow, d: Desfecho) {

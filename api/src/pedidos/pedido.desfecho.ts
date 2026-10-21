@@ -4,6 +4,8 @@ export interface OrdemSap {
   ordem: string;
   tipo_material: string;
   vkorg: string;
+  /** ordem de bonificacao do brinde de combo (Z011); ausente = venda */
+  bonificacao?: boolean;
 }
 
 /**
@@ -42,6 +44,7 @@ export function classificar(status: number, d: SapCriarPedidoResp): Desfecho {
     ordem: o.ordem,
     tipo_material: o.tipo_material,
     vkorg: o.vkorg,
+    ...(o.bonificacao === 'true' ? { bonificacao: true } : {}),
   }));
   const dtEntrega = dataValida(d.dt_entrega);
 

@@ -1640,6 +1640,70 @@ const t = async (nome, fn) => {
     await rej(con.cliente('9999999'), 404);
   });
 
+  await t('86. combo com brinde: a venda vai ao SAP sem o brinde e a bonificacao sai sozinha (ja aprovada), ligada ao pedido', async () => {
+    const CB = '11111111-1111-4111-8111-111111111111';
+    await db.exec(`
+      insert into bonificacao_tipos(codigo, descricao) values ('115', 'Brinde') on conflict do nothing;
+      insert into centros_custo(codigo, descricao) values ('2001501007', 'Comercial') on conflict do nothing;
+      insert into combos(id, nome, beneficio, brinde_cod_produto, brinde_qtd, tipo_bonificacao, centro_custo)
+        values ('${CB}', 'Combo T', 'produto_gratis', 'CMB2', 1, '115', '2001501007');
+      insert into combo_itens(combo_id, alvo_tipo, alvo_valor, qtd_minima) values ('${CB}', 'produto', 'CMB1', 2);
+    `);
+    const itens = [
+      { produto: 'CMB1', unidade: 'KI', quantidade: '2' },
+      { produto: 'CMB2', unidade: 'KI', quantidade: '1', brinde: true, preco_tabela: '50.00', desconto: 100 },
+    ];
+    const antes = sapChamadas.length;
+    sapRespostas = [OK('0000090', [['5800001', 'FERT', '2100']]), OK('0000091', [['5800002', 'FERT', '2100']])];
+    const r = await svc.receber(V, base(860, { itens }), prazo());
+    assert.equal(r.status, 'enviado');
+    assert.equal(sapChamadas.length - antes, 2);
+    const venda = sapChamadas[antes].body;
+    assert.deepEqual(venda.itens.map((i) => i.produto), ['CMB1']); // o brinde nao vai na venda
+    assert.ok(!venda.tipo || venda.tipo === 'venda');
+    const bonif = sapChamadas[antes + 1].body;
+    assert.equal(bonif.tipo, 'bonificacao');
+    assert.deepEqual([bonif.tipo_bonificacao, bonif.centro_custo], ['115', '2001501007']);
+    assert.deepEqual(bonif.itens.map((i) => [i.produto, i.quantidade]), [['CMB2', '1']]);
+    assert.equal(bonif.codigo_interno, venda.codigo_interno + 'B1');
+    assert.equal(bonif.dt_entrega, '2026-10-05'); // a mesma data que o SAP deu para a venda
+    // UM pedido do app com duas ordens no SAP: a venda e a bonificacao do combo
+    const row = await linha(860);
+    assert.deepEqual(row.ordens_sap.map((o) => [o.ordem, !!o.bonificacao]), [['5800001', false], ['5800002', true]]);
+    assert.equal((await db.query(`select count(*)::int as n from pedidos_app where cod_cliente = '1048753' and itens::text like '%CMB2%'`)).rows[0].n, 1);
+    assert.deepEqual(row.itens.find((i) => i.brinde).tipo_bonificacao, '115'); // as linhas de brinde guardam o tipo e o centro
+  });
+
+  await t('86b. bonificacao do combo falha (SAP recusa): pedido fica parcial com a venda; repetir cria so a bonificacao', async () => {
+    const antes = sapChamadas.length;
+    sapRespostas = [OK('0000092', [['5800010', 'FERT', '2100']]), { status: 422, body: { SUCESSO: 'false', PARCIAL: 'false', CODIGO_INTERNO: '0000092B1', ORDENS: [], MENSAGENS: [{ TIPO: 'E', MENSAGEM: 'motivo invalido' }] } }];
+    const itens = [{ produto: 'CMB1', unidade: 'KI', quantidade: '2' }, { produto: 'CMB2', unidade: 'KI', quantidade: '1', brinde: true, preco_tabela: '50.00', desconto: 100 }];
+    let r = await svc.receber(V, base(861, { itens }), prazo());
+    assert.equal(r.status, 'parcial');
+    assert.deepEqual(r.ordens.map((o) => [o.ordem, !!o.bonificacao]), [['5800010', false]]);
+    assert.match(r.erro, /Bonificacao do combo/);
+    // repete: a venda ja existe (o SAP devolve como duplicada) e so a bonificacao e criada
+    sapRespostas = [OK('0000092', [['5800010', 'FERT', '2100']]), OK('0000092B1', [['5800011', 'FERT', '2100']])];
+    r = await svc.tentarEnviar(U(861));
+    assert.equal(r.status, 'enviado');
+    assert.deepEqual(r.ordens_sap.map((o) => [o.ordem, !!o.bonificacao]), [['5800010', false], ['5800011', true]]);
+    assert.equal(sapChamadas.length - antes, 4);
+  });
+
+  await t('87. brinde sem combo que o sustente, ou acima do que o combo da, e recusado; combo de brinde sem tipo/centro tambem', async () => {
+    const antes = sapChamadas.length;
+    let r = await svc.receber(V, base(870, { itens: [{ produto: 'CMB1', unidade: 'KI', quantidade: '2' }, { produto: 'CMB2', unidade: 'KI', quantidade: '3', brinde: true }] }), prazo());
+    assert.equal(r.status, 'invalido');
+    assert.ok(r.erros.some((e) => /brinde CMB2/.test(e)));
+    r = await svc.receber(V, base(871, { itens: [{ produto: 'CMB1', unidade: 'KI', quantidade: '1' }, { produto: 'CMB2', unidade: 'KI', quantidade: '1', brinde: true }] }), prazo());
+    assert.equal(r.status, 'invalido'); // condicao nao fechou (1 cx < 2)
+    await db.exec(`update combos set tipo_bonificacao = null where nome = 'Combo T'`);
+    r = await svc.receber(V, base(872, { itens: [{ produto: 'CMB1', unidade: 'KI', quantidade: '2' }, { produto: 'CMB2', unidade: 'KI', quantidade: '1', brinde: true }] }), prazo());
+    assert.equal(r.status, 'invalido');
+    assert.ok(r.erros.some((e) => /sem tipo\/centro/.test(e)));
+    assert.equal(sapChamadas.length, antes);
+  });
+
   server.close();
   console.log(falhas ? `\n${falhas} teste(s) FALHARAM\n` : '\nTodos os testes passaram\n');
   process.exit(falhas ? 1 : 0);

@@ -164,6 +164,27 @@ export const CADASTROS: Record<string, Cadastro> = {
       };
     },
   },
+  prazos: {
+    tabela: 'prazos_pagamento',
+    chave: 'id',
+    ordem: [['ordem', true], ['descricao', true]],
+    validar: (b) => ({
+      codigo: texto(b, 'codigo', 'Codigo', { max: 10 }),
+      descricao: texto(b, 'descricao', 'Descricao', { max: 80, obrigatorio: true }),
+      ordem: Math.trunc(numero(b, 'ordem', 'Ordem', { min: 0, max: 9999 })),
+      ativo: flag(b, 'ativo', true),
+    }),
+  },
+  'motivos-exclusao': {
+    tabela: 'motivos_exclusao',
+    chave: 'id',
+    ordem: [['ordem', true], ['descricao', true]],
+    validar: (b) => ({
+      descricao: texto(b, 'descricao', 'Descricao', { max: 80, obrigatorio: true }),
+      ordem: Math.trunc(numero(b, 'ordem', 'Ordem', { min: 0, max: 9999 })),
+      ativo: flag(b, 'ativo', true),
+    }),
+  },
   incentivos: {
     tabela: 'incentivos_desconto',
     chave: 'id',

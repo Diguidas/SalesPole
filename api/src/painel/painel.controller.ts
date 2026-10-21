@@ -10,6 +10,7 @@ import { ConsultaPainelService } from './consulta-painel.service';
 import { PedidoPainelService } from './pedido-painel.service';
 import { UsuariosService } from './usuarios.service';
 import { ProdutosPainelService } from './produtos-painel.service';
+import { CombosService } from './combos.service';
 
 /** Endpoints do painel web (React). Login Microsoft via Supabase; permissao pelo papel em usuarios_painel. */
 @Controller('painel')
@@ -25,6 +26,7 @@ export class PainelController {
     private readonly catalogo: CatalogoPainelService,
     private readonly consulta: ConsultaPainelService,
     private readonly produtosPainel: ProdutosPainelService,
+    private readonly combos: CombosService,
   ) {}
 
   @Get('eu')
@@ -327,6 +329,28 @@ export class PainelController {
   ativarCadastro(@Req() req: { usuarioPainel: UsuarioPainel }, @Param('nome') nome: string, @Body() corpo: { chave?: string; ativo?: boolean }) {
     this.exigirCadastro(req.usuarioPainel, nome);
     return this.painel.ativarCadastro(nome, String(corpo?.chave ?? ''), corpo?.ativo === true, req.usuarioPainel.escopo);
+  }
+
+  // ---- combos de desconto: todos veem, so admin altera ----
+  @Get('combos')
+  listarCombos() {
+    return this.combos.listar();
+  }
+
+  @Post('combos')
+  gravarCombo(@Req() req: { usuarioPainel: UsuarioPainel }, @Body() corpo: Record<string, unknown>) {
+    this.exigirAdmin(req.usuarioPainel);
+    return this.combos.gravar(corpo ?? {});
+  }
+
+  @Post('combos/:id/ativo')
+  ativarCombo(@Req() req: { usuarioPainel: UsuarioPainel }, @Param('id', ParseUUIDPipe) id: string, @Body() corpo: { ativo?: boolean }) {
+    this.exigirAdmin(req.usuarioPainel);
+    return this.combos.ativar(id, corpo?.ativo === true);
+  }
+
+  private exigirAdmin(u: UsuarioPainel) {
+    if (u.papel !== 'admin') throw new ForbiddenException('Seu perfil nao permite alterar combos');
   }
 
   private exigirCadastro(u: UsuarioPainel, nome: string) {
