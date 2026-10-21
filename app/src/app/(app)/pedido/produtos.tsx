@@ -6,15 +6,17 @@ import { FlatList, Pressable, ScrollView, StyleSheet, Text, TextInput, View } fr
 import { buscarProdutos, infoProdutos, rotulo, type ProdutoCatalogo } from '@/db/catalogo';
 import { colocarNoCarrinho } from '@/db/carrinho';
 import { useDados, useTickAoFocar } from '@/db/hooks';
-import { carregarIncentivos, classificacaoPorProduto, descontoMaxPorProduto } from '@/db/incentivos';
+import { aplicarRegras, carregarIncentivos, classificacaoPorProduto } from '@/db/incentivos';
 import { itensDaOrdemSap, lerPedidoApp, salvarItens } from '@/db/pedidos';
 import { listarDestaques, ultimosPedidosDoCliente } from '@/db/produto';
 import { obterCliente, produtosCompradosPeloCliente } from '@/db/queries';
-import { ajustarDescontos, incentivoAplicavel, maxManual } from '@/domain/incentivo';
+import { avaliarCombos } from '@/domain/combo';
+import { incentivoAplicavel, maxManual } from '@/domain/incentivo';
 import { definirQuantidade, estimarTotal, removerItem, type ItemPedido } from '@/domain/pedido';
 import { lerQuantidade } from '@/domain/quantidade';
 import { dataBR, diasAtras, hojeISO, moeda, numero } from '@/lib/format';
 import { Botao, Card, Secao, Segmentado, Selo, Vazio } from '@/ui/components';
+import { CombosResumo } from '@/ui/CombosResumo';
 import { FotoProduto } from '@/ui/FotoProduto';
 import { ModalQuantidade } from '@/ui/ModalQuantidade';
 import { cor, espaco, raio } from '@/ui/theme';
@@ -103,7 +105,7 @@ export default function ProdutosDoPedido() {
     async (d): Promise<Record<string, ProdutoCatalogo>> => (cliente && itens.length ? infoProdutos(d, cliente.areas, itens.map((i) => i.produto), hoje) : {}),
     [cliente?.cod_cliente, codCarrinho, dep],
   );
-  const noCarrinho = useMemo(() => new Map(itens.map((i) => [`${i.produto}|${i.unidade}`, i.quantidade])), [itens]);
+  const noCarrinho = useMemo(() => new Map(itens.filter((i) => !i.brinde).map((i) => [`${i.produto}|${i.unidade}`, i.quantidade])), [itens]);
 
   // ---- aba Sugestao
   const { dados: comprados } = useDados((d) => (pedido ? produtosCompradosPeloCliente(d, pedido.cod_cliente) : Promise.resolve([])), [pedido?.cod_cliente]);
@@ -136,7 +138,7 @@ export default function ProdutosDoPedido() {
 
   async function adicionar(q: number, desconto: number) {
     if (!escolhido || !pedido) return;
-    await colocarNoCarrinho(db, id, pedido.itens, escolhido, q, desconto, 'somar', infoCarrinho ?? {}, incData ?? null);
+    await colocarNoCarrinho(db, id, pedido.itens, escolhido, q, desconto, 'somar', infoCarrinho ?? {}, incData ?? null, pedido.tipo !== 'bonificacao');
     setAviso(`Adicionado: ${escolhido.descricao}`);
     setEscolhido(null);
     setRecarga((r) => r + 1);
@@ -156,7 +158,7 @@ export default function ProdutosDoPedido() {
         fora++;
         continue;
       }
-      atual = await colocarNoCarrinho(db, id, atual, p, lerQuantidade(i.quantidade) ?? 0, 0, 'somar', { ...(infoCarrinho ?? {}), ...info }, incData ?? null);
+      atual = await colocarNoCarrinho(db, id, atual, p, lerQuantidade(i.quantidade) ?? 0, 0, 'somar', { ...(infoCarrinho ?? {}), ...info }, incData ?? null, pedido?.tipo !== 'bonificacao');
       ok++;
     }
     setAviso(`${ok} ${ok === 1 ? 'item adicionado' : 'itens adicionados'}${fora ? ` · ${fora} indisponíve${fora === 1 ? 'l' : 'is'}` : ''}`);
@@ -175,9 +177,15 @@ export default function ProdutosDoPedido() {
   }
   async function salvarAjustado(lista: ItemPedido[]) {
     // recalcula os descontos (incentivo por quantidade) para as quantidades novas
-    await salvarItens(db, id, incData ? ajustarDescontos(lista, descontoMaxPorProduto(infoCarrinho ?? {}), incData.rows, incData.ctx, classificacaoPorProduto(infoCarrinho ?? {})) : lista);
+    await salvarItens(db, id, incData ? aplicarRegras(lista, infoCarrinho ?? {}, incData, pedido?.tipo !== 'bonificacao').itens : lista);
     setRecarga((r) => r + 1);
   }
+
+  // combos: o que ja vale no carrinho e o que falta para fechar
+  const combosAgora = useMemo(
+    () => (incData && pedido?.tipo !== 'bonificacao' ? avaliarCombos(incData.combos, itens, incData.ctx, classificacaoPorProduto(infoCarrinho ?? {})) : null),
+    [incData, itens, infoCarrinho, pedido?.tipo],
+  );
 
   const totalCarrinho = useMemo(() => {
     const precos = Object.fromEntries(
@@ -256,21 +264,31 @@ export default function ProdutosDoPedido() {
         <ScrollView contentContainerStyle={{ padding: espaco.lg, paddingBottom: 100 }}>
           {itens.length ? (
             <>
+              <View style={{ marginBottom: espaco.sm }}>
+                <CombosResumo resultado={combosAgora} brindes={incData?.brindes ?? {}} />
+              </View>
               {itens.map((i) => {
                 const p = infoCarrinho?.[i.produto];
                 const q = lerQuantidade(i.quantidade) ?? 0;
                 const unid = p ? rotulo(p, i.unidade) : i.unidade;
                 const passo = p?.regra.multiplo ?? 1;
                 return (
-                  <Card key={`${i.produto}|${i.unidade}`} style={estilos.itemCarrinho} onPress={() => abrirInfo(i.produto)}>
+                  <Card key={`${i.produto}|${i.unidade}${i.brinde ? '|brinde' : ''}`} style={i.brinde ? { ...estilos.itemCarrinho, ...estilos.brinde } : estilos.itemCarrinho} onPress={i.brinde ? undefined : () => abrirInfo(i.produto)}>
                     <FotoProduto cod={i.produto} tamanho={48} />
                     <View style={{ flex: 1, gap: 2 }}>
                       <Text style={estilos.nome} numberOfLines={2}>{p?.descricao ?? i.produto}</Text>
+                      {i.brinde ? <Selo texto="🎁 GRÁTIS · brinde do combo" tom="ok" /> : null}
                       <Text style={estilos.suave}>
-                        {p?.preco ? `${moeda(p.preco.valor)}/${rotulo(p, p.preco.unidade)}` : 'sem preço de tabela'}
-                        {i.desconto ? ` · desconto ${i.desconto}%` : ''}
+                        {i.brinde ? 'Brinde do combo · grátis' : p?.preco ? `${moeda(p.preco.valor)}/${rotulo(p, p.preco.unidade)}` : 'sem preço de tabela'}
+                        {!i.brinde && i.desconto ? ` · desconto ${i.desconto}%` : ''}
                       </Text>
                     </View>
+                    {i.brinde ? (
+                      <View style={estilos.qtd}>
+                        <Text style={estilos.qtdTexto}>{numero(q)}</Text>
+                        <Text style={estilos.qtdUnidade}>{unid}</Text>
+                      </View>
+                    ) : (
                     <View style={estilos.controle}>
                       <Pressable onPress={() => (q <= passo ? remover(i) : mudar(i, -1))} hitSlop={8} style={estilos.passo}>
                         <Ionicons name={q <= passo ? 'trash-outline' : 'remove'} size={20} color={cor.texto} />
@@ -283,6 +301,7 @@ export default function ProdutosDoPedido() {
                         <Ionicons name="add" size={20} color={cor.texto} />
                       </Pressable>
                     </View>
+                    )}
                   </Card>
                 );
               })}
@@ -419,6 +438,7 @@ export default function ProdutosDoPedido() {
 }
 
 const estilos = StyleSheet.create({
+  brinde: { backgroundColor: cor.okFundo, borderColor: cor.ok, borderWidth: 1 },
   buscaBox: {
     flexDirection: 'row', alignItems: 'center', gap: 8, margin: espaco.lg, marginBottom: espaco.sm, paddingHorizontal: espaco.md,
     backgroundColor: cor.card, borderRadius: raio, borderWidth: 1, borderColor: cor.borda,

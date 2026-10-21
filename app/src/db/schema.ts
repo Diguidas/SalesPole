@@ -138,6 +138,7 @@ export const TABELAS_DE_DADOS = [
   'centros_custo',
   'destaques',
   'incentivos',
+  'combos',
   'feriados',
   'visita_perguntas',
   'avisos',
@@ -314,6 +315,19 @@ async function executarMigracoes(db: SQLiteDatabase): Promise<void> {
         CREATE TABLE IF NOT EXISTS avisos_lidos (id TEXT PRIMARY KEY, atualizado_em TEXT, lido_em TEXT NOT NULL);
       `);
       await db.execAsync('PRAGMA user_version = 12');
+    });
+  }
+  if (v < 13) {
+    // combos do painel (tela Desconto): condicao (itens, em JSON) + beneficio (brinde ou desconto)
+    await db.withTransactionAsync(async () => {
+      await db.execAsync(`
+        CREATE TABLE IF NOT EXISTS combos (
+          id TEXT PRIMARY KEY, nome TEXT NOT NULL, escopo TEXT NOT NULL DEFAULT 'geral', escopo_valor TEXT, beneficio TEXT NOT NULL,
+          brinde_cod_produto TEXT, brinde_qtd REAL, desconto_pct REAL, desconto_extra_max_pct REAL NOT NULL DEFAULT 0,
+          repete INTEGER NOT NULL DEFAULT 0, max_repeticoes INTEGER, itens TEXT NOT NULL DEFAULT '[]'
+        );
+      `);
+      await db.execAsync('PRAGMA user_version = 13');
     });
   }
 }

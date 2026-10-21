@@ -20,9 +20,14 @@ export interface ItemPedido {
   precoTabela?: string | null;
   /** teto do desconto TOTAL deste item (lista + incentivo + extra) para a quantidade atual */
   descontoLiberado?: number | null;
+  /** item de BRINDE de combo (preco zero; ver combo.ts): criado pelo app, nao pode ser editado nem entra na condicao de combo */
+  brinde?: boolean;
+  /** combo que gerou o brinde */
+  comboId?: string | null;
 }
 
-const mesmo = (i: ItemPedido, produto: string, unidade: string) => i.produto === produto && i.unidade === unidade;
+// o brinde de combo e gerado pelo app: as funcoes do carrinho nunca o tocam (mesmo que seja o mesmo produto de um item normal)
+const mesmo = (i: ItemPedido, produto: string, unidade: string) => !i.brinde && i.produto === produto && i.unidade === unidade;
 
 /** Adiciona um item; se o produto (na mesma unidade) ja esta no pedido, SOMA a quantidade. */
 export function adicionarItem(itens: ItemPedido[], novo: ItemPedido): ItemPedido[] {
@@ -110,6 +115,7 @@ export function estimarTotal(itens: ItemPedido[], precos: Record<string, PrecoRe
   let total = 0;
   let semEstimativa = 0;
   for (const i of itens) {
+    if (i.brinde) continue; // brinde de combo: sem valor
     const p = precos[i.produto];
     const q = lerQuantidade(i.quantidade);
     if (p && q !== null && p.unidade === i.unidade) total += precoUnitarioFinal(p, i) * q;

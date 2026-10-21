@@ -68,6 +68,7 @@ export async function carregarEntradaPdf(db: SQLiteDatabase, id: string): Promis
         preco: i.preco ?? null,
         preco_tabela: i.precoTabela ?? null,
         desconto: i.desconto ?? null,
+        ...(i.brinde ? { brinde: true } : {}),
       })),
       ordens_sap: pedido.ordens_sap,
     },

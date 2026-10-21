@@ -29,6 +29,8 @@ function paraApi(p: PedidoApp) {
     itens: p.itens.map((i) => ({
       produto: i.produto, unidade: i.unidade, quantidade: i.quantidade, preco: i.preco ?? null,
       preco_tabela: i.precoTabela ?? null, desconto: i.desconto ?? null,
+      // brinde de combo: sem preco; o servidor confere se algum combo do pedido o sustenta e o SAP grava com valor zero
+      ...(i.brinde ? { brinde: true, combo_id: i.comboId ?? null } : {}),
     })),
   };
 }

@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { prazoProducao, previsaoEntrega, proximaEntrega } from './entrega';
+import { avaliarCombos, comBrindes, type Combo } from './combo';
 import { avaliarCheckin, distanciaM, RAIO_VISITA_M, textoDistancia } from './geo';
 import { ajustarDescontos, descontoTotalMax, faixasDoProduto, incentivoAplicavel, maxManual, type ContextoIncentivo, type Incentivo } from './incentivo';
+import { htmlPedido, montarDocPedido } from './pedidoPdf';
 import { arredondar } from './numero';
 import {
   adicionarItem, aplicarDesconto, definirDesconto, definirQuantidade, estimarTotal, lerDesconto, precoParaEnvio, precoUnitarioFinal, removerItem, validarDesconto,
@@ -485,4 +487,103 @@ test('geo: check-in avalia o raio de 150 m (so avisa) e cliente sem coordenada f
   const limite = avaliarCheckin({ lat: -16.6869 + 0.00135, lng: -49.2648 }, cliente); // ~150 m
   assert.ok(limite.distanciaM! >= 148 && limite.distanciaM! <= 152, String(limite.distanciaM));
   assert.deepEqual(avaliarCheckin({ lat: 1, lng: 1 }, { lat: null, lng: null }), { distanciaM: null, foraDoRaio: false, semReferencia: true });
+});
+
+// ---------------------------------------------------------------- combos
+
+const ctxCombo: ContextoIncentivo = { codCliente: '100', codVendedor: '7', canais: ['10'], escritorios: ['E1'] };
+const itemQ = (produto: string, q: string): ItemPedido => ({ produto, unidade: 'KI', quantidade: q });
+const comboBase = (o: Partial<Combo>): Combo => ({
+  id: 'c1', nome: 'X e Y ganha Z', escopo: 'geral', escopo_valor: null, beneficio: 'produto_gratis', brinde_cod_produto: 'Z', brinde_qtd: 1,
+  desconto_pct: null, desconto_extra_max_pct: 0, repete: false, max_repeticoes: null,
+  itens: [{ alvo_tipo: 'produto', alvo_valor: 'X', qtd_minima: 10 }, { alvo_tipo: 'produto', alvo_valor: 'Y', qtd_minima: 5 }], ...o,
+});
+
+test('combo: compro X e Y, ganho Z (so quando os dois atingem o minimo)', () => {
+  const c = comboBase({});
+  assert.equal(avaliarCombos([c], [itemQ('X', '10'), itemQ('Y', '5')], ctxCombo).brindes[0].quantidade, 1);
+  const parcial = avaliarCombos([c], [itemQ('X', '10'), itemQ('Y', '4')], ctxCombo);
+  assert.equal(parcial.brindes.length, 0);
+  assert.equal(parcial.incompletos[0].faltas[0].falta, 1);
+  assert.equal(avaliarCombos([c], [itemQ('X', '30')], ctxCombo).brindes.length, 0);
+});
+
+test('combo: repete a cada condicao completa, respeitando o maximo', () => {
+  const itens = [itemQ('X', '30'), itemQ('Y', '10')];
+  assert.equal(avaliarCombos([comboBase({ repete: true })], itens, ctxCombo).brindes[0].quantidade, 2);
+  assert.equal(avaliarCombos([comboBase({ repete: true, max_repeticoes: 1 })], itens, ctxCombo).brindes[0].quantidade, 1);
+  assert.equal(avaliarCombos([comboBase({ repete: false })], itens, ctxCombo).brindes[0].quantidade, 1);
+});
+
+test('combo: condicao por marca/linha usa a classificacao e nao conta a mesma quantidade duas vezes', () => {
+  const c = comboBase({ itens: [{ alvo_tipo: 'marca', alvo_valor: 'Pole', qtd_minima: 10 }, { alvo_tipo: 'produto', alvo_valor: 'X', qtd_minima: 6 }] });
+  const cls = { X: { marca: 'Pole' }, W: { marca: 'Pole' } };
+  // X (6) vai para o item de produto; sobra W (5) para a marca: 5 < 10, nao fecha
+  assert.equal(avaliarCombos([c], [itemQ('X', '6'), itemQ('W', '5')], ctxCombo, cls).brindes.length, 0);
+  assert.equal(avaliarCombos([c], [itemQ('X', '6'), itemQ('W', '10')], ctxCombo, cls).brindes.length, 1);
+});
+
+test('combo: escopo (cliente/canal/escritorio) e brinde nao entra na condicao', () => {
+  const itens = [itemQ('X', '10'), itemQ('Y', '5')];
+  assert.equal(avaliarCombos([comboBase({ escopo: 'cliente', escopo_valor: '999' })], itens, ctxCombo).brindes.length, 0);
+  assert.equal(avaliarCombos([comboBase({ escopo: 'canal', escopo_valor: '10' })], itens, ctxCombo).brindes.length, 1);
+  assert.equal(avaliarCombos([comboBase({ escopo: 'escritorio', escopo_valor: 'E2,E1' })], itens, ctxCombo).brindes.length, 1);
+  const comBrinde = [itemQ('X', '10'), { ...itemQ('Y', '5'), brinde: true }];
+  assert.equal(avaliarCombos([comboBase({})], comBrinde, ctxCombo).brindes.length, 0);
+});
+
+test('combo: desconto % nos itens da condicao; vence o maior entre combo e incentivo; brinde fica sem desconto', () => {
+  const c = comboBase({ beneficio: 'desconto_pct', brinde_cod_produto: null, brinde_qtd: null, desconto_pct: 5, desconto_extra_max_pct: 2 });
+  const itens = [itemQ('X', '10'), itemQ('Y', '5'), itemQ('W', '1')];
+  const r = avaliarCombos([c], itens, ctxCombo);
+  assert.deepEqual(r.descontoPorProduto, { X: { pct: 5, extra: 2 }, Y: { pct: 5, extra: 2 } });
+  const inc: Incentivo = { id: 'i', cod_produto: 'X', escopo: 'geral', escopo_valor: null, qtd_minima: 0, desconto_pct: 3, desconto_extra_max_pct: 1 };
+  const aj = ajustarDescontos(itens, {}, [inc], ctxCombo, {}, r.descontoPorProduto);
+  assert.equal(aj[0].desconto, 5);
+  assert.equal(aj[0].descontoLiberado, 7);
+  assert.equal(aj[2].desconto, null);
+  const incMaior: Incentivo = { ...inc, desconto_pct: 8, desconto_extra_max_pct: 0 };
+  assert.equal(ajustarDescontos(itens, {}, [incMaior], ctxCombo, {}, r.descontoPorProduto)[0].desconto, 8);
+  const brinde = comBrindes(itens, [{ produto: 'Z', quantidade: 2, comboId: 'c1', comboNome: 'n' }], { Z: 'CX' });
+  assert.equal(brinde[brinde.length - 1].unidade, 'CX');
+  assert.equal(ajustarDescontos(brinde, {}, [], ctxCombo)[brinde.length - 1].desconto, null);
+  assert.equal(estimarTotal(brinde, {}).semEstimativa, 3); // o brinde nao entra nem como "sem estimativa"
+});
+
+// ---------------------------------------------------------------- PDF com brinde de combo
+
+test('PDF: brinde de combo sai com desconto total (combo), preco final zero, e entra nos descontos concedidos', () => {
+  const doc = montarDocPedido({
+    pedido: {
+      id: 'p1', codigo: '1', criado_em: '2026-10-20T12:00:00Z', dt_entrega: null, status: 'enviado', tipo: 'venda', cond_pagamento: null,
+      ordem_compra_cliente: null, endereco_entrega: null, observacao: null, ordens_sap: [],
+      itens: [
+        { produto: 'X', unidade: 'KI', quantidade: '10', preco: '100.00', preco_tabela: '100.00', desconto: null },
+        { produto: 'Z', unidade: 'KI', quantidade: '2', preco: null, preco_tabela: '50.00', desconto: 100, brinde: true },
+      ],
+    },
+    cliente: null, vendedor: null, tipo_bonificacao: null, fotos_url: '', gerado_em: '2026-10-20T12:00:00Z',
+    produtos: { X: { descricao: 'Produto X', tipo_material: 'FERT' }, Z: { descricao: 'Produto Z', tipo_material: 'FERT' } },
+  });
+  const itens = doc.folhas.flatMap((f) => f.itens);
+  const z = itens.find((i) => i.produto === 'Z')!;
+  assert.equal(z.brinde, true);
+  assert.equal(z.precoFinal, 0);
+  assert.equal(z.total, 0);
+  assert.equal(z.descontoPct, 100);
+  assert.equal(z.totalTabela, 100);
+  const html = htmlPedido(doc);
+  assert.ok(html.includes('Desconto total'));
+  assert.ok(html.includes('BRINDE DO COMBO'));
+});
+
+test('carrinho: comprar o mesmo produto do brinde pagando cria outra linha; o brinde nao e tocado', () => {
+  const brinde: ItemPedido = { produto: 'Z', unidade: 'KI', quantidade: '1', brinde: true, comboId: 'c1' };
+  let itens = adicionarItem([itemQ('X', '10'), brinde], itemQ('Z', '2'));
+  assert.equal(itens.length, 3);
+  assert.equal(itens.find((i) => i.produto === 'Z' && !i.brinde)?.quantidade, '2');
+  itens = definirQuantidade(itens, 'Z', 'KI', 5);
+  assert.equal(itens.find((i) => i.brinde)?.quantidade, '1');
+  assert.equal(itens.find((i) => i.produto === 'Z' && !i.brinde)?.quantidade, '5');
+  assert.equal(removerItem(itens, 'Z', 'KI').filter((i) => i.produto === 'Z').length, 1); // so o brinde sobra (o combo o recalcula)
 });

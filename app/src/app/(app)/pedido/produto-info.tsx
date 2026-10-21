@@ -65,7 +65,7 @@ export default function ProdutoInfo() {
   );
   const p = infoTodos?.[cod];
 
-  const existente = pedido?.itens.find((i) => i.produto === cod && p && i.unidade === p.unidade);
+  const existente = pedido?.itens.find((i) => !i.brinde && i.produto === cod && p && i.unidade === p.unidade);
 
   const [aba, setAba] = useState<Aba>('preco');
   const [qtdTxt, setQtdTxt] = useState('');
@@ -125,7 +125,7 @@ export default function ProdutoInfo() {
     if (passouDoMax) return Alert.alert('Desconto acima do máximo', `O máximo para esta quantidade é ${numero(maxVendedor)}%.`);
     setOcupado(true);
     try {
-      await colocarNoCarrinho(db, id, pedido.itens, p, q, manualValido, 'definir', infoTodos ?? {}, incData ?? null);
+      await colocarNoCarrinho(db, id, pedido.itens, p, q, manualValido, 'definir', infoTodos ?? {}, incData ?? null, pedido.tipo !== 'bonificacao');
       router.back();
     } finally {
       setOcupado(false);

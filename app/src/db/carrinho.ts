@@ -1,9 +1,8 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
-import { ajustarDescontos } from '@/domain/incentivo';
 import { adicionarItem, definirDesconto, definirQuantidade, type ItemPedido } from '@/domain/pedido';
 import { formatarQuantidade } from '@/domain/quantidade';
 import type { ProdutoCatalogo } from './catalogo';
-import { classificacaoPorProduto, descontoMaxPorProduto, type DadosIncentivo } from './incentivos';
+import { aplicarRegras, type DadosIncentivo } from './incentivos';
 import { salvarItens } from './pedidos';
 
 /**
@@ -22,8 +21,10 @@ export async function colocarNoCarrinho(
   modo: 'somar' | 'definir',
   infoDoCarrinho: Record<string, ProdutoCatalogo | undefined>,
   incentivos: DadosIncentivo | null,
+  /** false = pedido de bonificacao: combo nao vale */
+  usarCombos = true,
 ): Promise<ItemPedido[]> {
-  const existe = itensAtuais.some((i) => i.produto === p.cod_produto && i.unidade === p.unidade);
+  const existe = itensAtuais.some((i) => !i.brinde && i.produto === p.cod_produto && i.unidade === p.unidade);
   const manual = descontoManual > 0 ? descontoManual : null;
 
   let novos: ItemPedido[];
@@ -39,15 +40,7 @@ export async function colocarNoCarrinho(
     });
   }
 
-  const ajustados = incentivos
-    ? ajustarDescontos(
-        novos,
-        descontoMaxPorProduto({ ...infoDoCarrinho, [p.cod_produto]: p }),
-        incentivos.rows,
-        incentivos.ctx,
-        classificacaoPorProduto({ ...infoDoCarrinho, [p.cod_produto]: p }),
-      )
-    : novos;
+  const ajustados = incentivos ? aplicarRegras(novos, { ...infoDoCarrinho, [p.cod_produto]: p }, incentivos, usarCombos).itens : novos;
   await salvarItens(db, pedidoId, ajustados);
   return ajustados;
 }

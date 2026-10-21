@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { api } from '@/lib/api';
@@ -20,6 +21,7 @@ const NOME_MES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'j
  */
 export function EquipeHome() {
   const { entrarComo, abrirSeletor } = useEquipe();
+  const router = useRouter();
   const [dados, setDados] = useState<Resumo | null>(null);
   const [vendas, setVendas] = useState<VendasEquipe | null>(null);
   const [erro, setErro] = useState<string | null>(null);
@@ -68,6 +70,14 @@ export function EquipeHome() {
         <Text style={estilos.detalhe}>
           {t?.com_venda ?? 0} com venda · {t?.em_andamento ?? 0} em andamento · {Math.max((t?.planejadas ?? 0) - (t?.realizadas ?? 0), 0)} a visitar
         </Text>
+      </Card>
+
+      <Card onPress={() => router.push('/solicitacoes')} style={estilos.linha}>
+        <View style={{ flex: 1 }}>
+          <Text style={estilos.nome}>Solicitações de cliente</Text>
+          <Text style={estilos.detalhe}>Alteração e exclusão de clientes da equipe</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={20} color={cor.textoSuave} />
       </Card>
 
       <Secao titulo="Vendedores" detalhe={dados ? `${comRoteiro.length} com roteiro hoje` : undefined} />

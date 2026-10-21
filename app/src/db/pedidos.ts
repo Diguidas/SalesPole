@@ -26,7 +26,7 @@ export interface PedidoApp {
   motivo_rejeicao: string | null;
   itens: ItemPedido[];
   duplicado_de: string | null;
-  ordens_sap: Array<{ ordem: string; tipo_material: string; vkorg: string }>;
+  ordens_sap: Array<{ ordem: string; tipo_material: string; vkorg: string; bonificacao?: boolean }>;
   erro: string | null;
   tentativas: number;
 }
@@ -172,7 +172,8 @@ export async function descartarPedido(db: SQLiteDatabase, id: string): Promise<v
 export async function duplicarPedidoApp(db: SQLiteDatabase, id: string): Promise<string | null> {
   const p = await lerPedidoApp(db, id);
   if (!p) return null;
-  return criarRascunho(db, p.cod_cliente, p.itens, p.id, {
+  // brinde de combo nao se copia: o app recalcula os combos do novo pedido
+  return criarRascunho(db, p.cod_cliente, p.itens.filter((i) => !i.brinde), p.id, {
     tipo: p.tipo, tipo_bonificacao: p.tipo_bonificacao, centro_custo: p.centro_custo, justificativa: p.justificativa,
   });
 }
@@ -239,7 +240,7 @@ export interface ResultadoServidor {
   id: string | null;
   status: string;
   codigo?: string;
-  ordens?: Array<{ ordem: string; tipo_material: string; vkorg: string }>;
+  ordens?: Array<{ ordem: string; tipo_material: string; vkorg: string; bonificacao?: boolean }>;
   erro?: string | null;
   erros?: string[];
   dt_entrega?: string | null;

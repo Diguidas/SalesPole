@@ -51,6 +51,10 @@ export default function AppLayout() {
             <Stack.Screen name="pedido/produto-info" options={{ title: 'Informações do produto' }} />
             <Stack.Screen name="pedido-sap/[ordem]" options={{ title: 'Pedido' }} />
             <Stack.Screen name="titulo" options={{ title: 'Título' }} />
+            <Stack.Screen name="solicitacoes" options={{ title: 'Solicitações' }} />
+            <Stack.Screen name="solicitacao/cliente" options={{ title: 'Cadastro de cliente' }} />
+            <Stack.Screen name="solicitacao/alteracao" options={{ title: 'Alteração de cliente' }} />
+            <Stack.Screen name="solicitacao/exclusao" options={{ title: 'Exclusão de cliente' }} />
           </Stack>
         </SyncProvider>
       </SQLiteProvider>

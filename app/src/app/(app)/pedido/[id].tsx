@@ -7,7 +7,7 @@ import type { ProdutoCatalogo } from '@/db/catalogo';
 import { infoProdutos, rotulo } from '@/db/catalogo';
 import { feriadosDoCliente } from '@/db/feriados';
 import { useDados, useTickAoFocar } from '@/db/hooks';
-import { carregarIncentivos, classificacaoPorProduto, descontoMaxPorProduto } from '@/db/incentivos';
+import { aplicarRegras, carregarIncentivos, classificacaoPorProduto } from '@/db/incentivos';
 import {
   confirmarPedido, descartarPedido, duplicarPedidoApp, lerPedidoApp, salvarCampos, salvarItens, salvarTipo,
 } from '@/db/pedidos';
@@ -18,13 +18,15 @@ import {
   type ItemPedido,
 } from '@/domain/pedido';
 import { HORA_CORTE, previsaoEntrega } from '@/domain/entrega';
-import { ajustarDescontos, incentivoAplicavel, maxManual } from '@/domain/incentivo';
+import { avaliarCombos } from '@/domain/combo';
+import { incentivoAplicavel, maxManual } from '@/domain/incentivo';
 import { lerQuantidade, validarQuantidade } from '@/domain/quantidade';
 import { dataBR, dataComDia, hojeISO, moeda, numero, textoFormas, textoPrazo } from '@/lib/format';
 import { useSync } from '@/lib/sync-context';
 import { Botao, Card, Carregando, Linha, Secao, Segmentado, Selo, Vazio } from '@/ui/components';
 import { Dropdown } from '@/ui/Dropdown';
 import { compartilharPdfPedido } from '@/db/pedidoPdf';
+import { CombosResumo } from '@/ui/CombosResumo';
 import { FotoProduto } from '@/ui/FotoProduto';
 import { ModalQuantidade } from '@/ui/ModalQuantidade';
 import { seloDoPedido } from '@/ui/status';
@@ -78,6 +80,11 @@ export default function PedidoTela() {
   const itens = useMemo(() => pedido?.itens ?? [], [pedido]);
   const rascunho = pedido?.status === 'rascunho';
   const infoPronta = info !== undefined;
+  // combos: o que ja vale no carrinho e o que falta para fechar (so o rascunho; depois de enviado vale o que foi gravado)
+  const combosAgora = useMemo(
+    () => (rascunho && incData && pedido?.tipo !== 'bonificacao' ? avaliarCombos(incData.combos, itens, incData.ctx, classificacaoPorProduto(info ?? {})) : null),
+    [rascunho, incData, itens, info, pedido?.tipo],
+  );
 
   const problemas = useMemo(() => {
     const p: string[] = [];
@@ -90,6 +97,7 @@ export default function PedidoTela() {
     }
     if (!infoPronta) return p;
     for (const i of itens) {
+      if (i.brinde) continue; // brinde de combo: gerado pelo app, sem regra de quantidade nem de desconto
       const prod = info?.[i.produto];
       const nome = prod?.descricao ?? i.produto;
       if (!prod) {
@@ -107,7 +115,7 @@ export default function PedidoTela() {
       const msgDesc = validarDesconto(i.desconto ?? 0, Math.max(prod.preco?.descontoMax ?? 0, i.descontoLiberado ?? 0));
       if (msgDesc) p.push(`${nome}: ${msgDesc}`);
     }
-    return p;
+    return [...new Set(p)]; // o mesmo aviso nao se repete (a lista usa o texto como chave)
   }, [itens, info, infoPronta, cliente, pedido, just]);
 
   const total = useMemo(() => {
@@ -148,7 +156,7 @@ export default function PedidoTela() {
 
   /** Recalcula o desconto por incentivo para as quantidades atuais (antes de gravar e de enviar). */
   function ajustar(lista: ItemPedido[]): ItemPedido[] {
-    return incData && info ? ajustarDescontos(lista, descontoMaxPorProduto(info), incData.rows, incData.ctx, classificacaoPorProduto(info)) : lista;
+    return incData && info ? aplicarRegras(lista, info, incData, pedido?.tipo !== 'bonificacao').itens : lista;
   }
 
   async function gravar(novos: ItemPedido[]) {
@@ -204,6 +212,12 @@ export default function PedidoTela() {
       // o preco por caixa (ZPR2) e fixado AGORA, com a tabela que o aparelho tem neste momento
       // (descontos recalculados para as quantidades finais: incentivo por quantidade + parte do vendedor)
       const comPreco = ajustar(itens).map((i) => {
+        // brinde de combo vai sem preco e sem tabela: o servidor/SAP gravam o item com valor zero
+        // (a tabela fica guardada so para o PDF mostrar o desconto total do combo)
+        if (i.brinde) {
+          const pb = info?.[i.produto]?.preco;
+          return { ...i, preco: null, precoTabela: pb && pb.unidade === i.unidade && pb.valor > 0 ? pb.valor.toFixed(2) : null, desconto: 100 };
+        }
         const pr = info?.[i.produto]?.preco ?? undefined;
         const prRef = pr ? { ...pr, descontoMax: Math.max(pr.descontoMax ?? 0, i.descontoLiberado ?? 0) } : undefined;
         return {
@@ -396,7 +410,7 @@ export default function PedidoTela() {
               {pedido.ordens_sap.map((o) => (
                 <Pressable key={o.ordem} onPress={() => router.push(`/pedido-sap/${o.ordem}`)} style={estilos.ordem}>
                   <Text style={estilos.ordemTexto}>Ordem {o.ordem}</Text>
-                  <Text style={estilos.ordemSuave}>{o.tipo_material === 'FERT' ? 'Produtos fabricados' : 'Produtos de revenda'}</Text>
+                  <Text style={estilos.ordemSuave}>{o.bonificacao ? 'Bonificação do combo (brinde)' : o.tipo_material === 'FERT' ? 'Produtos fabricados' : 'Produtos de revenda'}</Text>
                   <Ionicons name="chevron-forward" size={18} color={cor.textoSuave} />
                 </Pressable>
               ))}
@@ -406,13 +420,14 @@ export default function PedidoTela() {
       ) : null}
 
       <Secao titulo="Itens" detalhe={`${itens.length}`} />
+      <CombosResumo resultado={combosAgora} brindes={incData?.brindes ?? {}} />
       {itens.length ? (
         itens.map((i) => (
           <ItemLinha
-            key={`${i.produto}-${i.unidade}`}
+            key={`${i.produto}-${i.unidade}${i.brinde ? '-brinde' : ''}`}
             item={i}
             prod={info?.[i.produto]}
-            editavel={!!rascunho}
+            editavel={!!rascunho && !i.brinde}
             onMais={() => mudar(i, 1)}
             onMenos={() => mudar(i, -1)}
             onEditar={() => setEditando(i)}
@@ -534,14 +549,15 @@ function ItemLinha({
   const teto = Math.max(prod?.preco?.descontoMax ?? 0, item.descontoLiberado ?? 0);
   const temDesc = !!item.desconto && item.desconto > 0 && !!prod?.preco && validarDesconto(item.desconto, teto) === null;
   const precoFinal = prod?.preco && temDesc ? aplicarDesconto(prod.preco.valor, item.desconto) : null;
-  const subtotal = prod?.preco && prod.preco.unidade === item.unidade ? moeda(precoUnitarioFinal(prod.preco, item) * q) : null;
+  const subtotal = !item.brinde && prod?.preco && prod.preco.unidade === item.unidade ? moeda(precoUnitarioFinal(prod.preco, item) * q) : null;
 
   return (
-    <Card style={estilos.item}>
+    <Card style={item.brinde ? { ...estilos.item, ...estilos.brinde } : estilos.item}>
       <FotoProduto cod={item.produto} tamanho={48} />
       <View style={{ flex: 1, gap: 2 }}>
         <Text style={estilos.itemNome} numberOfLines={2}>{prod?.descricao ?? item.produto}</Text>
-        <Text style={estilos.itemSuave}>{preco}{temDesc ? ` −${item.desconto}% = ${moeda(precoFinal)}/${unid}` : ''}{subtotal ? ` · ${subtotal}` : ''}</Text>
+        {item.brinde ? <Selo texto="🎁 GRÁTIS · brinde do combo" tom="ok" /> : null}
+        <Text style={estilos.itemSuave}>{item.brinde ? 'sem custo para o cliente' : preco}{temDesc ? ` −${item.desconto}% = ${moeda(precoFinal)}/${unid}` : ''}{subtotal ? ` · ${subtotal}` : ''}</Text>
       </View>
       {editavel ? (
         <View style={estilos.controle}>
@@ -567,6 +583,7 @@ function ItemLinha({
 }
 
 const estilos = StyleSheet.create({
+  brinde: { backgroundColor: cor.okFundo, borderColor: cor.ok, borderWidth: 1 },
   conteudo: { padding: espaco.lg, paddingBottom: espaco.xl * 2 },
   cliente: { fontSize: 18, fontWeight: '800', color: cor.texto },
   selos: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: espaco.sm },

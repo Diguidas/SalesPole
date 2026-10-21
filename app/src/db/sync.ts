@@ -25,6 +25,7 @@ export interface PullResposta {
   centros_custo?: Linha[];
   destaques?: Linha[];
   incentivos?: Linha[];
+  combos?: Linha[];
   feriados?: Linha[];
   /** visitas do vendedor dos ultimos dias (reconhece visita feita em outro aparelho e traz a validacao do painel) */
   visitas?: Linha[];
@@ -244,6 +245,19 @@ export async function aplicarPull(db: SQLiteDatabase, r: PullResposta): Promise<
           txt(x.id), txt(x.cod_produto), txt(x.escopo), txt(x.escopo_valor),
           txt(x.linha_id), txt(x.grupo_id), txt(x.categoria_id), txt(x.marca), num(x.qtd_minima) ?? 0,
           num(x.desconto_pct) ?? 0, num(x.desconto_extra_max_pct) ?? 0,
+        ]),
+      );
+    }
+
+    if (r.combos) {
+      await db.runAsync('DELETE FROM combos');
+      await inserir(
+        db,
+        'combos',
+        ['id', 'nome', 'escopo', 'escopo_valor', 'beneficio', 'brinde_cod_produto', 'brinde_qtd', 'desconto_pct', 'desconto_extra_max_pct', 'repete', 'max_repeticoes', 'itens'],
+        r.combos.map((x) => [
+          txt(x.id), txt(x.nome), txt(x.escopo) ?? 'geral', txt(x.escopo_valor), txt(x.beneficio), txt(x.brinde_cod_produto), num(x.brinde_qtd),
+          num(x.desconto_pct), num(x.desconto_extra_max_pct) ?? 0, flag(x.repete), num(x.max_repeticoes), JSON.stringify(Array.isArray(x.itens) ? x.itens : []),
         ]),
       );
     }

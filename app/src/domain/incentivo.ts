@@ -130,6 +130,9 @@ export function descontoTotalMax(descontoMaxLista: number, inc: Incentivo | null
   return arredondar(maxManual(descontoMaxLista, inc) + (inc ? inc.desconto_pct : 0), 2);
 }
 
+/** Desconto automatico que um combo da a cada produto (ver combo.ts): vale o maior entre ele e o incentivo por quantidade. */
+export type DescontoCombo = Record<string, { pct: number; extra: number } | undefined>;
+
 /**
  * Recalcula o desconto de cada item para a quantidade ATUAL: incentivo automatico (se atingiu a faixa)
  * + a parte do vendedor, que nunca passa de (maximo da lista + extra do incentivo).
@@ -143,10 +146,17 @@ export function ajustarDescontos(
   rows: Incentivo[],
   ctx: ContextoIncentivo,
   classificacaoPorProduto: Record<string, Classificacao | undefined> = {},
+  descontoCombo: DescontoCombo = {},
 ): ItemPedido[] {
   return itens.map((i) => {
+    if (i.brinde) return i; // brinde de combo: sem desconto, sem incentivo
     const q = lerQuantidade(i.quantidade) ?? 0;
-    const inc = incentivoAplicavel(rows, i.produto, q, ctx, classificacaoPorProduto[i.produto]);
+    let inc = incentivoAplicavel(rows, i.produto, q, ctx, classificacaoPorProduto[i.produto]);
+    const cb = descontoCombo[i.produto];
+    // combo e incentivo no mesmo produto: vale o maior desconto automatico (o extra do vendedor acompanha o que venceu)
+    if (cb && cb.pct > 0 && (!inc || cb.pct > inc.desconto_pct)) {
+      inc = { id: 'combo', cod_produto: null, escopo: 'geral', escopo_valor: null, qtd_minima: 0, desconto_pct: cb.pct, desconto_extra_max_pct: cb.extra };
+    }
     const maxLista = descontoMaxPorProduto[i.produto] ?? 0;
     const auto = inc ? inc.desconto_pct : 0;
     // itens antigos (sem descontoManual): o desconto que existia era do vendedor

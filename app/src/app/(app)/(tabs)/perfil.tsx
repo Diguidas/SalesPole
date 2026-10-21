@@ -1,5 +1,6 @@
 import { useSQLiteContext } from 'expo-sqlite';
 import Constants from 'expo-constants';
+import { useRouter } from 'expo-router';
 import { Alert, ScrollView, View } from 'react-native';
 import { useDados } from '@/db/hooks';
 import { contarFila } from '@/db/queries';
@@ -18,6 +19,7 @@ interface Vendedor {
 
 export default function Perfil() {
   const db = useSQLiteContext();
+  const router = useRouter();
   const { session, sair } = useSession();
   const { ultimoSync, sincronizar, sincronizando } = useSync();
 
@@ -57,6 +59,7 @@ export default function Perfil() {
       </Card>
 
       <View style={{ gap: espaco.sm }}>
+        <Botao titulo="Solicitações de cliente" tom="neutro" onPress={() => router.push('/solicitacoes')} />
         <Botao titulo="Sincronizar agora" onPress={sincronizar} carregando={sincronizando} />
         <Botao titulo="Sair" onPress={confirmarSaida} tom="neutro" />
       </View>
