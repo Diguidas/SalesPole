@@ -15,6 +15,24 @@ Fluxo: **SAP → (API, jobs) → Supabase → (API, /sync/pull) → SQLite do ce
 
 ## Subir tudo (desenvolvimento)
 
+### Atalho: `dev.cmd` (ou `.dev.ps1`), em casa, na empresa ou onde estiver
+Um comando sobe API, painel e Expo, cada um na sua janela, e **acerta o IP sozinho**: descobre o IP do PC na rede ativa
+(a que tem gateway), grava em `app/.env` (`EXPO_PUBLIC_API_URL`, com a porta de `api/.env`) e abre o Expo com `--clear`.
+Faz `npm install` nas pastas que ainda não têm `node_modules`.
+
+```powershell
+.dev.ps1                    # sobe tudo (ou dê duplo clique em dev.cmd)
+.dev.ps1 -SemPainel         # só API e app (também: -SemApi, -SemApp)
+.dev.ps1 -Emulador          # emulador do Android Studio: usa 10.0.2.2 em vez do IP da rede
+.dev.ps1 -SoConfigurar      # só atualiza o IP em app.env, sem abrir nada
+.dev.ps1 -LiberarFirewall   # 1ª vez em cada PC (PowerShell como administrador): libera API e Expo no firewall
+```
+Celular e PC precisam estar na mesma rede (e a rede da empresa não pode isolar os dispositivos entre si; se isolar, use o
+emulador ou um roteador/hotspot próprio). Na primeira vez em cada máquina, preencha `api/.env` e `app/.env`
+(os `.env.example` mostram o formato); o script só mexe na linha da URL da API.
+
+### Passo a passo manual
+
 ### 1. Supabase
 Rode, em ordem, os arquivos de `supabase/migrations/` no SQL Editor.
 
