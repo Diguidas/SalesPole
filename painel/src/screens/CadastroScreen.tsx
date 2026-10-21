@@ -27,7 +27,7 @@ export function CadastroScreen() {
   return <Cadastro key={nome} def={def} />;
 }
 
-function Cadastro({ def: defBase }: { def: DefCadastro }) {
+export function Cadastro({ def: defBase }: { def: DefCadastro }) {
   const { usuario } = useAuth();
   // admin altera tudo; quem tem a permissao "comunicados" altera so os avisos
   const admin = usuario?.papel === 'admin' || (defBase.nome === 'avisos' && tem(usuario, 'comunicados'));

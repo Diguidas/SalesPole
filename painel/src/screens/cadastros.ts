@@ -119,6 +119,38 @@ export const CADASTROS: Record<string, DefCadastro> = {
       { chave: 'ordem', rotulo: 'Ordem' },
     ],
   },
+  prazos: {
+    titulo: 'Prazos de pagamento',
+    descricao: 'Prazos que o vendedor escolhe no cadastro de cliente e o supervisor na alteração de condição de pagamento. A ordem menor aparece primeiro.',
+    nome: 'prazos',
+    chave: 'id',
+    rotuloNovo: 'Novo prazo',
+    campos: [
+      { chave: 'codigo', rotulo: 'Código SAP', tipo: 'texto', maxLength: 10, dica: 'Ex.: Z030' },
+      { chave: 'descricao', rotulo: 'Descrição', tipo: 'texto', obrigatorio: true, maxLength: 80, dica: 'Ex.: 30 dias' },
+      { chave: 'ordem', rotulo: 'Ordem', tipo: 'numero', dica: 'Menor aparece primeiro' },
+    ],
+    colunas: [
+      { chave: 'codigo', rotulo: 'Código', formatar: traco },
+      { chave: 'descricao', rotulo: 'Descrição' },
+      { chave: 'ordem', rotulo: 'Ordem' },
+    ],
+  },
+  'motivos-exclusao': {
+    titulo: 'Motivos de exclusão',
+    descricao: 'Motivos que o supervisor escolhe ao pedir a exclusão de um cliente. A ordem menor aparece primeiro.',
+    nome: 'motivos-exclusao',
+    chave: 'id',
+    rotuloNovo: 'Novo motivo',
+    campos: [
+      { chave: 'descricao', rotulo: 'Motivo', tipo: 'texto', obrigatorio: true, maxLength: 80 },
+      { chave: 'ordem', rotulo: 'Ordem', tipo: 'numero', dica: 'Menor aparece primeiro' },
+    ],
+    colunas: [
+      { chave: 'descricao', rotulo: 'Motivo' },
+      { chave: 'ordem', rotulo: 'Ordem' },
+    ],
+  },
   incentivos: {
     titulo: 'Incentivos de desconto',
     descricao: 'Desconto automático a partir de uma quantidade (em caixas). Quantidade mínima 0 vale desde a primeira unidade. Escolha a quem vale (escopo) e a que produtos (produto, linha, grupo, categoria ou marca).',

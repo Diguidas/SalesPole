@@ -14,6 +14,9 @@ import { InicioScreen } from './screens/InicioScreen';
 import { NovoPedidoScreen } from './screens/NovoPedidoScreen';
 import { PedidosScreen } from './screens/PedidosScreen';
 import { ClientesScreen } from './screens/ClientesScreen';
+import { DescontoScreen } from './screens/DescontoScreen';
+import { NovaSolicitacaoScreen } from './screens/NovaSolicitacaoScreen';
+import { SolicitacaoDetalheScreen, SolicitacoesScreen } from './screens/SolicitacoesScreen';
 import { ClienteDetalheScreen } from './screens/ClienteDetalheScreen';
 
 export function App() {
@@ -32,6 +35,11 @@ export function App() {
         <Route path="pedidos" element={<PedidosScreen />} />
         <Route path="clientes" element={<ClientesScreen />} />
         <Route path="clientes/:cod" element={<ClienteDetalheScreen />} />
+        <Route path="desconto" element={<DescontoScreen />} />
+        <Route path="cadastros/incentivos" element={<Navigate to="/desconto?aba=incentivo" replace />} />
+        <Route path="solicitacoes" element={<SolicitacoesScreen />} />
+        <Route path="solicitacoes/nova" element={<NovaSolicitacaoScreen />} />
+        <Route path="solicitacoes/:id" element={<SolicitacaoDetalheScreen />} />
         <Route path="produtos" element={<ProdutosScreen />} />
         <Route path="listas-preco" element={<ListasPrecoScreen />} />
         <Route path="bonificacoes" element={<BonificacoesScreen />} />

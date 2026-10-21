@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
-import { Settings, UsersRound, ListOrdered, House, PlusCircle, Activity, Users, MapPinCheck, SlidersHorizontal, CalendarDays, ChevronDown, Gift, LogOut, Package, Percent, Star, Tag, Landmark, Boxes, ScrollText, Megaphone } from 'lucide-react';
+import { Settings, UsersRound, ListOrdered, House, PlusCircle, Activity, Users, MapPinCheck, SlidersHorizontal, CalendarDays, ChevronDown, Gift, LogOut, Package, Percent, Star, Tag, Landmark, Boxes, ScrollText, Megaphone, FilePlus2, Clock, UserX } from 'lucide-react';
 import { ehHierarquia, tem, useAuth } from '../auth';
 import { GavetasProvider } from '../gavetas';
 import logo from '../assets/salespole.png';
@@ -23,6 +23,7 @@ const MENU: Array<Tela | Modulo> = [
       { para: '/pedidos', rotulo: 'Pedidos', icone: <ListOrdered size={16} strokeWidth={2} /> },
       { para: '/bonificacoes', rotulo: 'Bonificações (aprovação)', icone: <Gift size={16} strokeWidth={2} /> },
       { para: '/clientes', rotulo: 'Clientes', icone: <UsersRound size={16} strokeWidth={2} /> },
+      { para: '/solicitacoes', rotulo: 'Solicitações de cliente', icone: <FilePlus2 size={16} strokeWidth={2} /> },
       { para: '/produtos', rotulo: 'Produtos', icone: <Boxes size={16} strokeWidth={2} /> },
       { para: '/listas-preco', rotulo: 'Listas de preço', icone: <ScrollText size={16} strokeWidth={2} /> },
       { para: '/visitas', rotulo: 'Visitas', icone: <MapPinCheck size={16} strokeWidth={2} /> },
@@ -36,9 +37,11 @@ const MENU: Array<Tela | Modulo> = [
       { para: '/cadastros/tipos-bonificacao', rotulo: 'Tipos de bonificação', icone: <Gift size={16} strokeWidth={2} /> },
       { para: '/cadastros/centros-custo', rotulo: 'Centros de custo', icone: <Landmark size={16} strokeWidth={2} /> },
       { para: '/cadastros/destaques', rotulo: 'Destaques e lançamentos', icone: <Star size={16} strokeWidth={2} /> },
-      { para: '/cadastros/incentivos', rotulo: 'Incentivos de desconto', icone: <Percent size={16} strokeWidth={2} /> },
+      { para: '/desconto', rotulo: 'Desconto', icone: <Percent size={16} strokeWidth={2} /> },
       { para: '/cadastros/avisos', rotulo: 'Avisos para vendedores', icone: <Megaphone size={16} strokeWidth={2} /> },
       { para: '/cadastros/perguntas-visita', rotulo: 'Perguntas da visita', icone: <MapPinCheck size={16} strokeWidth={2} /> },
+      { para: '/cadastros/prazos', rotulo: 'Prazos de pagamento', icone: <Clock size={16} strokeWidth={2} /> },
+      { para: '/cadastros/motivos-exclusao', rotulo: 'Motivos de exclusão', icone: <UserX size={16} strokeWidth={2} /> },
       { para: '/cadastros/feriados', rotulo: 'Feriados', icone: <CalendarDays size={16} strokeWidth={2} /> },
     ],
   },

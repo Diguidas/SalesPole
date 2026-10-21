@@ -18,6 +18,8 @@ export interface ItemBruto {
   preco_tabela?: string | null;
   /** desconto total em % sobre a tabela */
   desconto?: number | null;
+  /** brinde de combo: sai no PDF como desconto total de combo (preco final zero) */
+  brinde?: boolean;
 }
 
 export interface ProdutoBruto {
@@ -77,6 +79,8 @@ export interface ItemDoc {
   precoFinal: number | null;
   total: number | null;
   totalTabela: number | null;
+  /** brinde de combo: desconto total, preco final zero */
+  brinde: boolean;
   pesoKg: number | null;
   foto: string | null;
 }
@@ -192,11 +196,11 @@ function itemDoc(i: ItemBruto, p: ProdutoBruto | undefined, fotosUrl: string): I
   const finalEnviado = i.preco != null && i.preco !== '' ? Number(i.preco) : null;
   const desc = typeof i.desconto === 'number' && i.desconto > 0 ? i.desconto : null;
   // preco final: o que foi enviado ao SAP; sem ele, a tabela com o desconto
-  const precoFinal = finalEnviado !== null && Number.isFinite(finalEnviado) ? finalEnviado : tabela !== null ? Math.round(tabela * (1 - (desc ?? 0) / 100) * 100) / 100 : null;
+  const precoFinal = i.brinde ? 0 : finalEnviado !== null && Number.isFinite(finalEnviado) ? finalEnviado : tabela !== null ? Math.round(tabela * (1 - (desc ?? 0) / 100) * 100) / 100 : null;
   // o preco e por caixa: so multiplica quando o item esta na unidade de venda
   const naUnidadeDoPreco = !p?.unidade_venda || p.unidade_venda === i.unidade;
   // desconto exibido = o que de fato esta no preco enviado (tabela x preco final), nao o digitado
-  const descReal = tabela !== null && tabela > 0 && precoFinal !== null ? Math.max(0, Math.round((1 - precoFinal / tabela) * 10000) / 100) : desc;
+  const descReal = i.brinde ? 100 : tabela !== null && tabela > 0 && precoFinal !== null ? Math.max(0, Math.round((1 - precoFinal / tabela) * 10000) / 100) : desc;
   const unTexto =p?.conversoes?.find((c) => c.unidade === i.unidade)?.texto || (p?.unidade_venda === i.unidade ? p?.unidade_venda_texto : null) || i.unidade;
   return {
     produto: i.produto,
@@ -208,6 +212,7 @@ function itemDoc(i: ItemBruto, p: ProdutoBruto | undefined, fotosUrl: string): I
     precoFinal: precoFinal !== null && Number.isFinite(precoFinal) ? precoFinal : null,
     total: naUnidadeDoPreco && precoFinal !== null && Number.isFinite(precoFinal) ? Math.round(quantidade * precoFinal * 100) / 100 : null,
     totalTabela: naUnidadeDoPreco && tabela !== null && Number.isFinite(tabela) ? Math.round(quantidade * tabela * 100) / 100 : null,
+    brinde: i.brinde === true,
     pesoKg: pesoDoItem(quantidade, i.unidade, p),
     foto: fotosUrl ? `${fotosUrl.replace(/\/$/, '')}/${encodeURIComponent(i.produto.trim())}.jpg` : null,
   };
@@ -343,10 +348,10 @@ function htmlFolha(d: DocPedido, f: FolhaDoc, idx: number): string {
         : `<div class="ph">${ini}</div>`;
       return `<tr>
         <td class="f">${foto}</td>
-        <td><div class="desc">${esc(i.descricao)}</div><div class="sku">SKU ${esc(i.produto)}</div></td>
+        <td><div class="desc">${esc(i.descricao)}</div><div class="sku">SKU ${esc(i.produto)}${i.brinde ? ' · BRINDE DO COMBO' : ''}</div></td>
         <td class="d">${numeroPdf(i.quantidade, 3)} ${esc(i.unidade)}</td>
         <td class="d">${moedaPdf(i.precoTabela)}</td>
-        <td class="d">${i.descontoPct ? `${numeroPdf(i.descontoPct, 2)}%` : '—'}</td>
+        <td class="d">${i.brinde ? '<b>Desconto total<br>(combo)</b>' : i.descontoPct ? `${numeroPdf(i.descontoPct, 2)}%` : '—'}</td>
         <td class="d">${moedaPdf(i.precoFinal)}</td>
         <td class="d neg">${moedaPdf(i.total)}</td>
       </tr>`;
