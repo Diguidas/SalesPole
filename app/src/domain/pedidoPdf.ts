@@ -1,3 +1,4 @@
+// GERADO a partir de shared/pdf/pedidoPdf.ts. NAO EDITE AQUI: altere a fonte e rode "npm run shared" (app ou api).
 // Documento "Confirmacao de pedido" (PDF). Codigo PURO, sem dependencias: o app (offline, expo-print) e o painel
 // (impressao do navegador) usam este mesmo arquivo. ATENCAO: ha uma copia identica em painel/src/pedidoPdf.ts
 // (o teste do app confere que as duas sao iguais): altere aqui e copie para la.
@@ -424,7 +425,7 @@ function htmlFolha(d: DocPedido, f: FolhaDoc, idx: number): string {
   ${d.observacao ? `<div class="aviso"><strong>OBSERVAÇÕES:</strong> ${esc(d.observacao)}</div>` : ''}
   <div class="aviso">${bonif ? 'Bonificação sem cobrança: o valor é apenas de referência. ' : ''}Este documento confirma o registro do pedido e <strong>não é documento fiscal</strong>. Os valores são estimados com a tabela de preços vigente na data do pedido e estão sujeitos à conferência na nota fiscal emitida pelo SAP.${todas > 1 ? ' O pedido foi dividido em ordens de venda separadas (uma folha para cada).' : ''}</div>
 
-  <div class="rod"><span>Gerado em ${esc(dataHoraPdf(d.geradoEm))} · Pedido ${esc(d.numero || d.referencia)}</span><img src="${LOGO_SALESPOLE}" alt="Sales Pole"></div>
+  <div class="rod"><span>Gerado em ${esc(dataHoraPdf(d.geradoEm))} · Pedido ${esc(d.numero || d.referencia)}</span><img src="${LOGO_SALESPOLE}" alt="SalesPole"></div>
 </section>`;
 }
 

@@ -1,4 +1,5 @@
 import { arredondar } from './numero';
+import { escolherVigente, fatorDaUnidade } from './regras/preco';
 // Regras de preco: SEM dependencia de tela/banco (testavel em Node: npm run test:dominio).
 
 export type GrupoMaterial = 'FERT' | 'HAWA';
@@ -21,6 +22,7 @@ export interface AreaCliente {
   /** canal de venda (KNVV-VTWEG) e escritorio de vendas (KNVV-VKBUR): definem quais regras de incentivo valem */
   canal?: { codigo: string } | null;
   escritorio?: { codigo: string } | null;
+  tipo_estabelecimento?: { codigo: string } | null;
 }
 
 /** Area do cliente que atende um tipo de material; null = o cliente nao compra esse tipo. */
@@ -45,9 +47,7 @@ export interface LinhaPreco {
  * lista (A913). Dentro de cada um, a vigencia que comecou mais recentemente.
  */
 export function escolherPreco(grupos: LinhaPreco[], listas: LinhaPreco[], hoje: string): LinhaPreco | null {
-  const vale = (l: LinhaPreco) => l.datab <= hoje && l.datbi >= hoje && l.kbetr !== null && l.kbetr > 0;
-  const melhor = (ls: LinhaPreco[]) => ls.filter(vale).sort((a, b) => b.datab.localeCompare(a.datab))[0] ?? null;
-  return melhor(grupos) ?? melhor(listas);
+  return escolherVigente(grupos, listas, hoje);
 }
 
 export interface PrecoUnitario {
@@ -127,10 +127,7 @@ export function unidadeInterna(valor: string, c: Conversoes): string {
 
 /** Quantas unidades base ha em 1 `unidade`; null = nao sei converter. */
 export function fatorBase(unidade: string | null | undefined, c: Conversoes): number | null {
-  if (!unidade) return null;
-  if (c.base && unidade === c.base) return 1;
-  const f = c.fatores[unidade];
-  return f && f > 0 ? f : null;
+  return fatorDaUnidade(unidade, c.base, (u) => c.fatores[u]);
 }
 
 /** Preco por 1 `de` -> preco por 1 `para` (ex.: R$ 12/KG -> R$ 120/CX se 1 CX = 10 KG). null = sem conversao. */

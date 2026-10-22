@@ -4,7 +4,7 @@ import type { ClienteResumo } from '@/db/queries';
 import type { Visita } from '@/db/visitas';
 import { moeda } from '@/lib/format';
 import { Card, Selo } from './components';
-import { cor, espaco } from './theme';
+import { cor, espaco, estilosTema } from './theme';
 
 /** Cartao de cliente (tela do dia e lista de clientes). `ordem` mostra a sequencia de visita. */
 export function CardCliente({
@@ -38,11 +38,11 @@ export function CardCliente({
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   card: { flexDirection: 'row', alignItems: 'center', gap: espaco.md, marginBottom: espaco.sm },
   ordem: { width: 30, height: 30, borderRadius: 15, backgroundColor: cor.primaria, alignItems: 'center', justifyContent: 'center' },
   ordemTexto: { color: '#fff', fontWeight: '800', fontSize: 14 },
   nome: { fontSize: 16, fontWeight: '700', color: cor.texto },
   razao: { fontSize: 13, color: cor.textoSuave },
   selos: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 4 },
-});
+}));

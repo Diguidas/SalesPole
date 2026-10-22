@@ -192,7 +192,7 @@ export function ClienteDetalheScreen() {
           <Linha rotulo="Limite total" valor={moeda(c.limite_total)} />
           <Linha rotulo="Disponível" valor={moeda(c.limite_disponivel)} />
           <Linha rotulo="Em aberto (a vencer)" valor={moeda(c.titulos.em_aberto)} />
-          <Linha rotulo="Vencido" valor={<strong style={{ color: c.titulos.vencido > 0 ? '#dc2626' : undefined }}>{moeda(c.titulos.vencido)}</strong>} />
+          <Linha rotulo="Vencido" valor={<strong style={{ color: c.titulos.vencido > 0 ? 'var(--c-erro)' : undefined }}>{moeda(c.titulos.vencido)}</strong>} />
         </div>
         <div className="titulo" style={{ margin: '12px 0 6px' }}>Títulos em aberto</div>
         {c.titulos.lista.length === 0 ? <p className="suave">Nenhum título em aberto.</p> : (
@@ -264,7 +264,7 @@ export function ClienteDetalheScreen() {
       <div className="cartoes" style={{ marginTop: 12 }}>
         <div className="cartao"><div className="suave">Compras (12 meses)</div><div className="numero">{moeda(c.total_12m)}</div><div className="suave">{c.ultimos_pedidos.length ? `última em ${dataBR(c.ultimos_pedidos[0].dt_criacao)}` : 'sem compras no período'}</div></div>
         <div className="cartao"><div className="suave">Títulos em aberto</div><div className="numero">{moeda(c.titulos.em_aberto)}</div><div className="suave">a vencer</div></div>
-        <div className="cartao"><div className="suave">Títulos vencidos</div><div className="numero" style={{ color: c.titulos.vencido > 0 ? '#dc2626' : '#16a34a' }}>{moeda(c.titulos.vencido)}</div><div className="suave">{c.titulos.vencido > 0 ? 'atrasados' : 'nada em atraso'}</div></div>
+        <div className="cartao"><div className="suave">Títulos vencidos</div><div className="numero" style={{ color: c.titulos.vencido > 0 ? 'var(--c-erro)' : 'var(--c-ok)' }}>{moeda(c.titulos.vencido)}</div><div className="suave">{c.titulos.vencido > 0 ? 'atrasados' : 'nada em atraso'}</div></div>
         <div className="cartao"><div className="suave">Pedido mínimo</div><div className="numero">{c.pedido_minimo ? moeda(c.pedido_minimo) : '—'}</div><div className="suave">{c.vendedores.length ? c.vendedores.map((v) => v.nome ?? v.cod_vendedor).join(' / ') : 'sem vendedor sincronizado'}</div></div>
       </div>
 
@@ -285,11 +285,11 @@ export function ClienteDetalheScreen() {
           <Linha rotulo="Limite" valor={`${moeda(c.limite_disponivel)} de ${moeda(c.limite_total)}`} />
           {usado != null && c.limite_total ? (
             <div style={{ margin: '4px 0 6px' }}>
-              <div className="barra-trilho"><div className="barra" style={{ width: `${Math.max(pctLimite, 1)}%`, background: pctLimite > 90 ? '#dc2626' : '#ea580c' }} /></div>
+              <div className="barra-trilho"><div className="barra" style={{ width: `${Math.max(pctLimite, 1)}%`, background: pctLimite > 90 ? 'var(--c-erro)' : 'var(--c-prim)' }} /></div>
               <div className="suave">{pctLimite.toFixed(0)}% do limite utilizado</div>
             </div>
           ) : null}
-          <Linha rotulo="Vencido" valor={<span style={{ color: c.titulos.vencido > 0 ? '#dc2626' : undefined }}>{moeda(c.titulos.vencido)}</span>} />
+          <Linha rotulo="Vencido" valor={<span style={{ color: c.titulos.vencido > 0 ? 'var(--c-erro)' : undefined }}>{moeda(c.titulos.vencido)}</span>} />
         </Secao>
 
         <Secao titulo="Compras por mês" aoVerMais={verCompras} rotuloMais="Ver tabela">

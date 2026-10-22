@@ -155,8 +155,10 @@ export class PedidosService {
     if (eCli) throw eCli;
     const areas = ((cli as { areas?: unknown } | null)?.areas ?? []) as Array<{
       tipo_material?: string; lista_preco?: { codigo?: string } | null; rede?: { codigo?: string } | null;
-      canal?: { codigo?: string } | null; escritorio?: { codigo?: string } | null;
+      canal?: { codigo?: string } | null; escritorio?: { codigo?: string } | null; tipo_estabelecimento?: { codigo?: string } | null;
     }>;
+    const { data: vend } = await this.sb.from('vendedores').select('equipe').eq('cod_vendedor', codVendedor).maybeSingle();
+    const equipeDoVendedor = ((vend as { equipe?: string | null } | null)?.equipe ?? '').trim();
 
     const codigos = [...new Set(p.itens.map((i) => i.produto))];
     const { data: prods, error: eProd } = await this.sb.from('produtos').select('cod_produto,tipo_material,dados').in('cod_produto', codigos);
@@ -177,6 +179,10 @@ export class PedidosService {
       codVendedor,
       canais: [...new Set(areas.map((a) => a.canal?.codigo).filter((x): x is string => !!x))],
       escritorios: [...new Set(areas.map((a) => a.escritorio?.codigo).filter((x): x is string => !!x))],
+      // lista sozinha ("L") e lista com o grupo de preco do cliente ("L.G")
+      listasPreco: [...new Set(areas.flatMap((a) => (a.lista_preco?.codigo ? [a.lista_preco.codigo, ...(a.rede?.codigo ? [`${a.lista_preco.codigo}.${a.rede.codigo}`] : [])] : [])))],
+      tiposEstabelecimento: [...new Set(areas.map((a) => a.tipo_estabelecimento?.codigo).filter((x): x is string => !!x))],
+      equipes: equipeDoVendedor ? [equipeDoVendedor] : [],
       hoje: dataSP(new Date().toISOString()),
     };
 
@@ -184,7 +190,7 @@ export class PedidosService {
     const [{ data: cmb, error: eCmb }, { data: cmbItens, error: eCmbI }] = await Promise.all([
       this.sb
         .from('combos')
-        .select('id,nome,escopo,escopo_valor,beneficio,brinde_cod_produto,brinde_qtd,tipo_bonificacao,centro_custo,desconto_pct,desconto_extra_max_pct,repete,max_repeticoes,vigencia_ini,vigencia_fim,ativo')
+        .select('id,nome,escopo,escopo_valor,beneficio,brinde_cod_produto,brinde_qtd,tipo_bonificacao,centro_custo,desconto_pct,desconto_extra_max_pct,repete,max_repeticoes,faixas,vigencia_ini,vigencia_fim,ativo')
         .eq('ativo', true),
       this.sb.from('combo_itens').select('combo_id,alvo_tipo,alvo_valor,qtd_minima'),
     ]);

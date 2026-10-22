@@ -3,7 +3,7 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-nati
 import { contarFila } from '@/db/queries';
 import { useDados } from '@/db/hooks';
 import { useSync } from '@/lib/sync-context';
-import { cor } from './theme';
+import { cor, estilosTema } from './theme';
 
 /** Botao do cabecalho: sincroniza agora e mostra quantos pedidos aguardam envio. */
 export function BotaoSync() {
@@ -27,7 +27,7 @@ export function BotaoSync() {
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   botao: { marginRight: 14, width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
   contador: {
     position: 'absolute', top: -4, right: -6, minWidth: 18, height: 18, borderRadius: 9,
@@ -35,4 +35,4 @@ const estilos = StyleSheet.create({
     borderWidth: 1.5, borderColor: cor.primaria,
   },
   contadorTexto: { color: '#fff', fontSize: 11, fontWeight: '700' },
-});
+}));

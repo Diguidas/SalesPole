@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Sobe o Sales Pole inteiro para desenvolvimento (API, painel e app Expo), em qualquer rede.
+  Sobe o SalesPole inteiro para desenvolvimento (API, painel e app Expo), em qualquer rede.
 
 .DESCRIPTION
   1. Descobre o IP do PC na rede ativa (a que tem gateway), em casa ou na rede corporativa.

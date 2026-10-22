@@ -25,7 +25,8 @@
     "react-native": "0.86.3",
     "react-native-safe-area-context": "~5.7.0",
     "react-native-screens": "~4.26.0",
-    "react-native-url-polyfill": "^4.0.0"
+    "react-native-url-polyfill": "^4.0.0",
+    "react-native-webview": "13.16.1"
   },
   "devDependencies": {
     "@types/node": "^26.6.4",
@@ -39,8 +40,10 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
-    "test:dominio": "tsc -p tsconfig.dominio.json && node --test .test-out/dominio.test.js",
-    "test:db": "node test/rodar-db-test.mjs"
+    "test:dominio": "npm run test:shared && tsc -p tsconfig.dominio.json && node --test .test-out/dominio.test.js",
+    "test:db": "node test/rodar-db-test.mjs",
+    "shared": "node ../shared/sincronizar.mjs",
+    "test:shared": "node ../shared/sincronizar.mjs --check"
   },
   "private": true
 }

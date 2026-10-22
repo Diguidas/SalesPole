@@ -2,16 +2,19 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { StyleSheet, View } from 'react-native';
 import { SessionProvider, useSession } from '@/lib/auth';
+import { TemaProvider } from '@/lib/tema';
 import { EquipeProvider } from '@/lib/equipe';
 import { Carregando } from '@/ui/components';
 
 export default function RootLayout() {
   return (
     <SessionProvider>
-      <EquipeProvider>
-        <StatusBar style="light" />
-        <Navegador />
-      </EquipeProvider>
+      <TemaProvider>
+        <EquipeProvider>
+          <StatusBar style="light" />
+          <Navegador />
+        </EquipeProvider>
+      </TemaProvider>
     </SessionProvider>
   );
 }

@@ -18,7 +18,7 @@ import { formatarQuantidade, lerQuantidade, validarQuantidade } from '@/domain/q
 import { dataBR, dataComDia, hojeISO, moeda, numero } from '@/lib/format';
 import { Botao, Card, Carregando, Linha, Secao, Segmentado, Vazio } from '@/ui/components';
 import { FotoProduto } from '@/ui/FotoProduto';
-import { cor, espaco, raio } from '@/ui/theme';
+import { cor, espaco, raio, estilosTema } from '@/ui/theme';
 
 type Aba = 'preco' | 'incentivo';
 
@@ -312,7 +312,7 @@ export default function ProdutoInfo() {
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   conteudo: { padding: espaco.lg, paddingBottom: 120 },
   fotoBox: { alignItems: 'center', paddingVertical: espaco.md },
   titulo: { fontSize: 20, fontWeight: '800', color: cor.texto },
@@ -348,4 +348,4 @@ const estilos = StyleSheet.create({
   qtdBox: { alignItems: 'center', minWidth: 56 },
   qtdInput: { fontSize: 18, fontWeight: '800', color: cor.texto, textAlign: 'center', minWidth: 56, padding: 0 },
   qtdUn: { fontSize: 11, color: cor.textoSuave },
-});
+}));

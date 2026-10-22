@@ -6,7 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { configuracaoOk } from '@/lib/config';
 import { useSession } from '@/lib/auth';
 import { Botao } from '@/ui/components';
-import { cor, espaco, raio } from '@/ui/theme';
+import { cor, espaco, raio, estilosTema } from '@/ui/theme';
 
 export default function Entrar() {
   const { entrar } = useSession();
@@ -33,7 +33,7 @@ export default function Entrar() {
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={estilos.conteudo} keyboardShouldPersistTaps="handled">
           <Image source={require('../../assets/logo.png')} style={estilos.logo} resizeMode="contain" />
-          <Text style={estilos.titulo}>Sales Pole</Text>
+          <Text style={estilos.titulo}>SalesPole</Text>
           <Text style={estilos.subtitulo}>Pole Alimentos · Força de Vendas</Text>
 
           {!configuracaoOk ? (
@@ -80,7 +80,7 @@ export default function Entrar() {
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   tela: { flex: 1, backgroundColor: cor.fundo },
   conteudo: { flexGrow: 1, justifyContent: 'center', padding: espaco.xl },
   logo: { width: 110, height: 110, alignSelf: 'center' },
@@ -97,4 +97,4 @@ const estilos = StyleSheet.create({
     paddingHorizontal: espaco.lg, paddingVertical: 13, fontSize: 16, color: cor.texto,
   },
   erro: { color: cor.erro, fontSize: 14, marginTop: espaco.sm },
-});
+}));

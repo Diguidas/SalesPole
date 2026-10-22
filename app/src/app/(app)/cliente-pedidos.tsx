@@ -5,7 +5,7 @@ import { obterCliente, pedidosDoCliente, titulosDoCliente } from '@/db/queries';
 import { dataBR, moeda } from '@/lib/format';
 import { Card, Secao, Selo, Vazio } from '@/ui/components';
 import { seloDoPedido } from '@/ui/status';
-import { cor, espaco } from '@/ui/theme';
+import { cor, espaco, estilosTema } from '@/ui/theme';
 
 export default function PedidosDoCliente() {
   const { cod } = useLocalSearchParams<{ cod: string }>();
@@ -68,10 +68,10 @@ export default function PedidosDoCliente() {
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   conteudo: { padding: espaco.lg, paddingBottom: espaco.xl * 2 },
   item: { flexDirection: 'row', alignItems: 'center', gap: espaco.md, marginBottom: espaco.sm },
   itemTitulo: { fontSize: 15, fontWeight: '700', color: cor.texto },
   itemSuave: { fontSize: 13, color: cor.textoSuave, fontWeight: '400' },
   erro: { fontSize: 12, color: cor.erro },
-});
+}));

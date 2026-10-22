@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { api } from '../api';
 import { useAuth } from '../auth';
 
@@ -29,7 +29,7 @@ export function ParametrosScreen() {
     void carregar();
   }, [carregar]);
 
-  const atual = dados?.parametros.find((p) => p.chave === 'status_cancelaveis');
+  const valorDe = (chave: string) => dados?.parametros.find((p) => p.chave === chave);
 
   return (
     <>
@@ -39,20 +39,58 @@ export function ParametrosScreen() {
       {erro && <p className="erro-msg">{erro}</p>}
       {!dados && !erro && <div className="vazio">Carregando…</div>}
       {dados && (
-        <StatusCancelaveis
-          key={atual?.updated_at ?? 'novo'}
-          inicial={Array.isArray(atual?.valor) ? (atual!.valor as string[]) : []}
-          conhecidos={dados.status_sap}
-          atualizadoEm={atual?.updated_at}
-          podeEditar={admin}
-          aoSalvar={carregar}
-        />
+        <>
+          <ParametroStatus
+            key={'c' + (valorDe('status_cancelaveis')?.updated_at ?? 'novo')}
+            chave="status_cancelaveis"
+            titulo="Cancelamento de pedido pelo app"
+            descricao='Em quais status do SAP o vendedor vê o botão "Cancelar pedido". O SAP ainda confere e recusa o que já foi faturado.'
+            vazio={<>Nenhum status marcado: o cancelamento fica <strong>desligado</strong>.</>}
+            seloLigado={(n) => `Ligado em ${n} status`}
+            seloDesligado="Desligado"
+            inicial={Array.isArray(valorDe('status_cancelaveis')?.valor) ? (valorDe('status_cancelaveis')!.valor as string[]) : []}
+            conhecidos={dados.status_sap}
+            atualizadoEm={valorDe('status_cancelaveis')?.updated_at}
+            podeEditar={admin}
+            aoSalvar={carregar}
+          />
+          <div style={{ height: 16 }} />
+          <ParametroStatus
+            key={'s' + (valorDe('status_atualizar_sync')?.updated_at ?? 'novo')}
+            chave="status_atualizar_sync"
+            titulo="Atualização dos itens na sincronização"
+            descricao="Quais status do SAP têm os itens atualizados a cada sincronização (pedido ainda em andamento). Só esses pedem ao SAP para recalcular o ciclo, que é a parte lenta. Os demais só têm os itens buscados uma vez, quando ainda não existem. Sem nenhum status marcado, vale os pedidos dos últimos 15 dias, de qualquer status."
+            vazio={<>Nenhum status marcado: a sincronização atualiza <strong>todos os pedidos dos últimos 15 dias</strong>, de qualquer status.</>}
+            seloLigado={(n) => `Atualiza ${n} status`}
+            seloDesligado="Últimos 15 dias, sem filtro"
+            inicial={Array.isArray(valorDe('status_atualizar_sync')?.valor) ? (valorDe('status_atualizar_sync')!.valor as string[]) : []}
+            conhecidos={dados.status_sap}
+            atualizadoEm={valorDe('status_atualizar_sync')?.updated_at}
+            podeEditar={admin}
+            aoSalvar={carregar}
+          />
+        </>
       )}
     </>
   );
 }
 
-function StatusCancelaveis({ inicial, conhecidos, atualizadoEm, podeEditar, aoSalvar }: { inicial: string[]; conhecidos: string[]; atualizadoEm?: string; podeEditar: boolean; aoSalvar: () => Promise<void> }) {
+interface PropsParametroStatus {
+  chave: string;
+  titulo: string;
+  descricao: string;
+  vazio: ReactNode;
+  seloLigado: (n: number) => string;
+  seloDesligado: string;
+  inicial: string[];
+  conhecidos: string[];
+  atualizadoEm?: string;
+  podeEditar: boolean;
+  aoSalvar: () => Promise<void>;
+}
+
+/** Lista de status do SAP marcados para um parametro (cada parametro e uma lista de status). */
+function ParametroStatus({ chave, titulo, descricao, vazio, seloLigado, seloDesligado, inicial, conhecidos, atualizadoEm, podeEditar, aoSalvar }: PropsParametroStatus) {
   const [marcados, setMarcados] = useState<string[]>(inicial);
   const [novo, setNovo] = useState('');
   const [salvando, setSalvando] = useState(false);
@@ -81,7 +119,7 @@ function StatusCancelaveis({ inicial, conhecidos, atualizadoEm, podeEditar, aoSa
     setSalvando(true);
     setErro(null);
     try {
-      await api('/painel/parametros/status_cancelaveis', { method: 'POST', body: { valor: marcados } });
+      await api(`/painel/parametros/${chave}`, { method: 'POST', body: { valor: marcados } });
       setSalvo(true);
       await aoSalvar();
     } catch (e) {
@@ -95,10 +133,10 @@ function StatusCancelaveis({ inicial, conhecidos, atualizadoEm, podeEditar, aoSa
     <div className="card">
       <div className="linha">
         <div>
-          <div className="titulo">Cancelamento de pedido pelo app</div>
-          <div className="suave">Em quais status do SAP o vendedor vê o botão "Cancelar pedido". O SAP ainda confere e recusa o que já foi faturado.</div>
+          <div className="titulo">{titulo}</div>
+          <div className="suave">{descricao}</div>
         </div>
-        <span className={`selo ${inicial.length ? 'ok' : 'aviso'}`}>{inicial.length ? `Ligado em ${inicial.length} status` : 'Desligado'}</span>
+        <span className={`selo ${inicial.length ? 'ok' : 'aviso'}`}>{inicial.length ? seloLigado(inicial.length) : seloDesligado}</span>
       </div>
 
       <div className="form-grade" style={{ marginTop: 14 }}>
@@ -129,7 +167,7 @@ function StatusCancelaveis({ inicial, conhecidos, atualizadoEm, podeEditar, aoSa
         </div>
       )}
 
-      {marcados.length === 0 && <p className="suave" style={{ marginTop: 12 }}>Nenhum status marcado: o cancelamento fica <strong>desligado</strong>.</p>}
+      {marcados.length === 0 && <p className="suave" style={{ marginTop: 12 }}>{vazio}</p>}
       {erro && <p className="erro-msg">{erro}</p>}
       {podeEditar && (
         <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 14 }}>

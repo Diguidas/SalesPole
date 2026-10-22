@@ -8,7 +8,7 @@ import { useEquipe } from '@/lib/equipe';
 import { Vazio } from '@/ui/components';
 import { EquipeClientes } from '@/ui/EquipeClientes';
 import { CardCliente } from '@/ui/CardCliente';
-import { cor, espaco, raio } from '@/ui/theme';
+import { cor, espaco, raio, estilosTema } from '@/ui/theme';
 
 /** Supervisor/gerente sem vendedor escolhido ve os clientes da equipe; com vendedor (ou vendedor comum), a carteira local. */
 export default function Clientes() {
@@ -49,10 +49,10 @@ function ClientesVendedor() {
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   buscaBox: {
     flexDirection: 'row', alignItems: 'center', gap: 8, margin: espaco.lg, paddingHorizontal: espaco.md,
     backgroundColor: cor.card, borderRadius: raio, borderWidth: 1, borderColor: cor.borda,
   },
   busca: { flex: 1, paddingVertical: 12, fontSize: 16, color: cor.texto },
-});
+}));

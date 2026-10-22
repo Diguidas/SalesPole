@@ -7,7 +7,7 @@ import { historicoDoProduto, obterCliente, produtosCompradosPeloCliente } from '
 import { dataBR, hojeISO, moeda, numero } from '@/lib/format';
 import { Card, Carregando, Segmentado, Selo, Vazio } from '@/ui/components';
 import { FotoProduto } from '@/ui/FotoProduto';
-import { cor, espaco } from '@/ui/theme';
+import { cor, espaco, estilosTema } from '@/ui/theme';
 
 type Aba = 'lista' | 'semgiro' | 'comprados';
 const DIAS_SEM_GIRO = 30;
@@ -156,7 +156,7 @@ export default function ProdutosDoCliente() {
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   conteudo: { padding: espaco.lg, paddingBottom: espaco.xl * 2 },
   explica: { color: cor.textoSuave, fontSize: 13, marginVertical: espaco.md },
   item: { marginBottom: espaco.sm, gap: 3 },
@@ -167,4 +167,4 @@ const estilos = StyleSheet.create({
   hist: { marginTop: espaco.sm, paddingTop: espaco.sm, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: cor.borda },
   histLinha: { flexDirection: 'row', justifyContent: 'space-between', gap: espaco.md },
   histValor: { fontSize: 13, color: cor.texto, fontWeight: '600' },
-});
+}));

@@ -83,7 +83,7 @@ export function ProdutoDetalhe({ cod }: { cod: string }) {
       <div className="prod-topo">
         <FotoProduto cod={p.cod_produto} url={p.imagem_url} nome={p.descricao} tamanho="grande" />
         <div style={{ minWidth: 0 }}>
-          <h3 style={{ margin: '0 0 4px', fontSize: 17, color: '#0f172a' }}>{p.descricao ?? p.cod_produto}</h3>
+          <h3 style={{ margin: '0 0 4px', fontSize: 17, color: 'var(--c-texto)' }}>{p.descricao ?? p.cod_produto}</h3>
           <div className="suave">código {p.cod_produto}{p.ean ? ` · EAN ${p.ean}` : ''}</div>
           <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
             <span className={`selo ${p.ativo ? 'ok' : ''}`}>{p.ativo ? 'Ativo' : 'Sem preço vigente'}</span>

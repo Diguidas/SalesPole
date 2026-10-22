@@ -161,6 +161,9 @@ export interface SapItensResp {
       valor_unitario: string;
       recusa: string;
       cod_recusa: string;
+      situacao: string;
+      qtd_faturada: string;
+      valor_faturado: string;
     }>;
   }>;
 }

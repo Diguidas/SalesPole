@@ -330,4 +330,20 @@ async function executarMigracoes(db: SQLiteDatabase): Promise<void> {
       await db.execAsync('PRAGMA user_version = 13');
     });
   }
+  if (v < 14) {
+    // item do SAP: situacao (ex.: Atendido Parcialmente) e o que foi faturado de fato
+    await db.withTransactionAsync(async () => {
+      await db.execAsync('ALTER TABLE pedido_itens_sap ADD COLUMN situacao TEXT');
+      await db.execAsync('ALTER TABLE pedido_itens_sap ADD COLUMN qtd_faturada REAL');
+      await db.execAsync('ALTER TABLE pedido_itens_sap ADD COLUMN valor_faturado REAL');
+      await db.execAsync('PRAGMA user_version = 14');
+    });
+  }
+  if (v < 15) {
+    // combos com faixas (beneficio por degrau de caixas), em JSON
+    await db.withTransactionAsync(async () => {
+      await db.execAsync("ALTER TABLE combos ADD COLUMN faixas TEXT NOT NULL DEFAULT '[]'");
+      await db.execAsync('PRAGMA user_version = 15');
+    });
+  }
 }

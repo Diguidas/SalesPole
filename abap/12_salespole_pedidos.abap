@@ -7,7 +7,7 @@ METHOD salespole_pedidos.
   "     carteira: ordem de cliente de outro vendedor nao volta.
   "   - dtentrega: pedidos da carteira com data de remessa naquele dia
   "     (qualquer data de criacao) -> tela "remessas de hoje"
-  " Sem SUBMIT zsdr124 (a ZSDT139 deve ser alimentada por job).
+  " SUBMIT zsdr124 so quando vem por ordens (senao a ZSDT139 vem do job).
   " pedido_externo / plataforma permitem ao app reconhecer o pedido que ele
   " mesmo criou (codigo interno gravado em BSTKD_E).
 
@@ -149,6 +149,16 @@ METHOD salespole_pedidos.
     FOR ALL ENTRIES IN @lt_vbak
     WHERE vbeln = @lt_vbak-vbeln
       AND posnr = '000000'.
+
+  " ordens pedidas pelo numero: roda a rotina da ZSDT139 antes de ler o ciclo do pedido
+  " (na carteira inteira por data NAO roda: o SUBMIT de centenas de ordens estoura o timeout de 60 s do gateway;
+  " a atualizacao dos itens, que depende da ZSDT139, e pedida pela API so para os status marcados no painel)
+  IF lr_vbeln IS NOT INITIAL.
+    DATA(lr_doc) = VALUE rseloption( FOR v IN lt_vbak ( sign = 'I' option = 'EQ' low = v-vbeln ) ).
+    SUBMIT zsdr124
+      WITH s_doc IN lr_doc
+      AND RETURN.
+  ENDIF.
 
   SELECT vbeln, refaturamento
     FROM zsdt139

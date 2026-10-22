@@ -1,5 +1,5 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
-import type { Combo, ItemCondicao } from '@/domain/combo';
+import type { Combo, FaixaCombo, ItemCondicao } from '@/domain/combo';
 
 interface LinhaCombo {
   id: string;
@@ -14,6 +14,7 @@ interface LinhaCombo {
   repete: number;
   max_repeticoes: number | null;
   itens: string;
+  faixas: string | null;
 }
 
 /** Combos do painel que o aparelho tem (vigentes na ultima sincronizacao); o escopo (cliente, canal...) e conferido no calculo. */
@@ -26,6 +27,13 @@ export async function carregarCombos(db: SQLiteDatabase): Promise<Combo[]> {
     } catch {
       itens = [];
     }
-    return { ...r, repete: r.repete === 1, itens };
+    let faixas: FaixaCombo[] = [];
+    try {
+      faixas = (JSON.parse(r.faixas ?? '[]') as FaixaCombo[]).map((f) => ({ qtd_minima: Number(f.qtd_minima), desconto_pct: f.desconto_pct == null ? null : Number(f.desconto_pct), brinde_qtd: f.brinde_qtd == null ? null : Number(f.brinde_qtd) }));
+    } catch {
+      faixas = [];
+    }
+    const { faixas: _f, ...resto } = r;
+    return { ...resto, repete: r.repete === 1, itens, faixas };
   });
 }

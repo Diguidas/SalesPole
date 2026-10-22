@@ -3,13 +3,16 @@ import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import { Alert, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useDados, useTickAoFocar } from '@/db/hooks';
+import { carregarIncentivos, oportunidadesDoCliente } from '@/db/incentivos';
 import { obterOuCriarRascunho } from '@/db/pedidos';
-import { historicoMensalDoCliente, noRoteiroDoDia, obterCliente, titulosDoCliente, ultimaCompraDoCliente } from '@/db/queries';
+import { historicoMensalDoCliente, noRoteiroDoDia, obterCliente, produtosCompradosPeloCliente, titulosDoCliente, ultimaCompraDoCliente } from '@/db/queries';
+import { sugerirReposicao } from '@/domain/reposicao';
 import { visitaDoClienteNoDia } from '@/db/visitas';
 import { dataBR, diaSemanaHoje, documento, hojeISO, linkMapa, moeda, NOME_DIA_CURTO, textoFormas, textoPrazo } from '@/lib/format';
 import { Botao, Card, Carregando, Linha, Secao, Selo, Vazio } from '@/ui/components';
+import { CombosResumo } from '@/ui/CombosResumo';
 import { LineChart } from '@/ui/LineChart';
-import { cor, espaco } from '@/ui/theme';
+import { cor, espaco, estilosTema } from '@/ui/theme';
 
 const NOME_MES_CURTO = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
 const valorCurto = (v: number) => (v >= 1000 ? `${(v / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} mil` : String(Math.round(v)));
@@ -26,6 +29,13 @@ export default function ClienteDetalhe() {
   const { dados: ultima } = useDados((db) => ultimaCompraDoCliente(db, cod), [cod, tick]);
   const { dados: historico } = useDados((db) => historicoMensalDoCliente(db, cod, hoje), [cod, hoje, tick]);
   const { dados: titulos } = useDados((db) => titulosDoCliente(db, cod), [cod]);
+
+  // oportunidades para o vendedor levar na conversa: combos que o cliente quase fecha e produtos que ja passaram do ritmo dele
+  const { dados: oport } = useDados(async (d) => {
+    if (!c) return null;
+    const [inc, compras] = await Promise.all([carregarIncentivos(d, c.cod_cliente, c.areas), produtosCompradosPeloCliente(d, c.cod_cliente)]);
+    return { combos: await oportunidadesDoCliente(d, compras, inc), brindes: inc.brindes, repor: sugerirReposicao(compras, hojeISO(), { max: 5 }) };
+  }, [c?.cod_cliente]);
 
   async function novoPedido() {
     // retoma o rascunho aberto deste cliente ou cria um novo
@@ -149,6 +159,27 @@ export default function ClienteDetalhe() {
         {c.bloqueado ? <Text style={estilos.aviso}>Cliente bloqueado: não é possível lançar pedido.</Text> : null}
       </View>
 
+      {oport && oport.repor.length ? (
+        <>
+          <Secao titulo="Hora de repor" detalhe="passou do ritmo de compra dele" />
+          <Card>
+            {oport.repor.map((s) => (
+              <View key={s.cod_produto} style={{ paddingVertical: 4 }}>
+                <Text style={estilos.itemTitulo} numberOfLines={1}>{s.descricao}</Text>
+                <Text style={estilos.itemSuave}>compra a cada ~{s.intervaloDias} dias · última há {s.diasDesde} dias</Text>
+              </View>
+            ))}
+            <Text style={estilos.itemSuave}>Abra um pedido e use a aba Sugestão para adicionar tudo de uma vez.</Text>
+          </Card>
+        </>
+      ) : null}
+      {oport && oport.combos.incompletos.length ? (
+        <>
+          <Secao titulo="Combos para fechar" detalhe="com o que ele costuma comprar" />
+          <CombosResumo resultado={oport.combos} brindes={oport.brindes} />
+        </>
+      ) : null}
+
       <Secao titulo="Última compra" />
       <Card>
         {ultima ? (
@@ -175,7 +206,7 @@ export default function ClienteDetalhe() {
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   conteudo: { padding: espaco.lg, paddingBottom: espaco.xl * 2 },
   nome: { fontSize: 20, fontWeight: '800', color: cor.texto },
   razao: { fontSize: 14, color: cor.textoSuave, marginTop: 2 },
@@ -193,4 +224,4 @@ const estilos = StyleSheet.create({
   itemTitulo: { fontSize: 15, fontWeight: '700', color: cor.texto },
   itemSuave: { fontSize: 13, color: cor.textoSuave, fontWeight: '400' },
   erro: { fontSize: 12, color: cor.erro },
-});
+}));

@@ -4,10 +4,10 @@ import { Alert, Linking, RefreshControl, ScrollView, StyleSheet, Text, View } fr
 import { api } from '@/lib/api';
 import { dataBR, moeda } from '@/lib/format';
 import { Botao, Card, Carregando, Linha, Secao, Selo, Vazio } from '@/ui/components';
-import { cor, espaco } from '@/ui/theme';
+import { cor, espaco, estilosTema } from '@/ui/theme';
 
 interface Nota { nota_fiscal?: string; serie?: string; danfe_url?: string; xml_url?: string; boleto_url?: string }
-interface Item { item: string; cod_produto: string; denominacao: string | null; quantidade: number | null; unidade_venda: string | null; valor_unitario: number | null; recusa: string | null; cod_recusa: string | null }
+interface Item { item: string; cod_produto: string; denominacao: string | null; quantidade: number | null; unidade_venda: string | null; valor_unitario: number | null; recusa: string | null; cod_recusa: string | null; situacao: string | null; qtd_faturada: number | null; valor_faturado: number | null }
 interface PedidoEquipe {
   ordem: string;
   cod_cliente: string;
@@ -103,7 +103,14 @@ export default function PedidoEquipe() {
             </Text>
             {i.recusa || i.cod_recusa ? (
               <Text style={estilos.recusa}>Item recusado: {i.recusa ?? 'sem descrição do SAP'}{i.cod_recusa ? ` (cód. ${i.cod_recusa})` : ''}</Text>
-            ) : null}
+            ) : (
+              <>
+                {i.situacao ? <Text style={estilos.nota2}>{i.situacao}</Text> : null}
+                {i.qtd_faturada != null && i.qtd_faturada !== i.quantidade ? (
+                  <Text style={estilos.faturado}>Faturado: {i.qtd_faturada} {i.unidade_venda ?? ''}{i.valor_faturado != null ? ` · ${moeda(i.qtd_faturada * i.valor_faturado)}` : ''}</Text>
+                ) : null}
+              </>
+            )}
           </View>
         </Card>
       ))}
@@ -111,7 +118,7 @@ export default function PedidoEquipe() {
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   conteudo: { padding: espaco.lg, paddingBottom: espaco.xl * 2 },
   cliente: { fontSize: 18, fontWeight: '800', color: cor.texto },
   selos: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: espaco.sm },
@@ -123,5 +130,6 @@ const estilos = StyleSheet.create({
   item: { flexDirection: 'row', alignItems: 'center', marginBottom: espaco.sm },
   itemNome: { fontSize: 14, fontWeight: '700', color: cor.texto },
   itemRecusado: { backgroundColor: cor.erroFundo },
+  faturado: { fontSize: 12, color: cor.aviso, fontWeight: '600' },
   recusa: { fontSize: 13, color: cor.erro, fontWeight: '700', marginTop: 4 },
-});
+}));

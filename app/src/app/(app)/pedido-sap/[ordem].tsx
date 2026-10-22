@@ -12,7 +12,7 @@ import { dataBR, moeda, numero } from '@/lib/format';
 import { useSync } from '@/lib/sync-context';
 import { Botao, Card, Carregando, Linha, Secao, Selo, Vazio } from '@/ui/components';
 import { seloDoPedido } from '@/ui/status';
-import { cor, espaco } from '@/ui/theme';
+import { cor, espaco, estilosTema } from '@/ui/theme';
 
 /** Detalhe de uma ordem de venda que veio do SAP (itens, notas e boleto). */
 export default function PedidoSapTela() {
@@ -176,6 +176,12 @@ export default function PedidoSapTela() {
                 {i.valor_unitario ? ` · ${moeda(i.valor_unitario)}/${i.unidade_venda ?? 'un'}` : ''}
               </Text>
               {i.recusa ? <Text style={estilos.recusa}>Item recusado: {i.recusa}</Text> : null}
+              {!i.recusa && i.situacao ? <Text style={estilos.itemSuave}>{i.situacao}</Text> : null}
+              {!i.recusa && i.qtd_faturada != null && i.qtd_faturada !== i.quantidade ? (
+                <Text style={estilos.faturado}>
+                  Faturado: {numero(i.qtd_faturada)} {i.unidade_venda ?? ''}{i.valor_faturado != null ? ` · ${moeda(i.qtd_faturada * i.valor_faturado)}` : ''}
+                </Text>
+              ) : null}
             </View>
           </Card>
         ))
@@ -195,7 +201,7 @@ export default function PedidoSapTela() {
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   conteudo: { padding: espaco.lg, paddingBottom: espaco.xl * 2 },
   cliente: { fontSize: 18, fontWeight: '800', color: cor.texto },
   selos: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: espaco.sm },
@@ -207,4 +213,5 @@ const estilos = StyleSheet.create({
   itemNome: { fontSize: 15, fontWeight: '700', color: cor.texto },
   itemSuave: { fontSize: 13, color: cor.textoSuave },
   recusa: { fontSize: 12, color: cor.erro, fontWeight: '600' },
-});
+  faturado: { fontSize: 12, color: cor.aviso, fontWeight: '600' },
+}));

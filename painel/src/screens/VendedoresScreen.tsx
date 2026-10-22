@@ -122,7 +122,7 @@ export function VendedoresPanel() {
         <button className="chip" onClick={carregar}>Atualizar</button>
       </div>
 
-      {aviso && <p style={{ color: '#166534', fontSize: 13 }}>{aviso}</p>}
+      {aviso && <p style={{ color: 'var(--c-ok-texto)', fontSize: 13 }}>{aviso}</p>}
       {erro && <p className="erro-msg">{erro}</p>}
 
       {acesso && (

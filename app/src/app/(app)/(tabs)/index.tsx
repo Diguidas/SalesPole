@@ -10,7 +10,7 @@ import { useSync } from '@/lib/sync-context';
 import { EquipeHome } from '@/ui/EquipeHome';
 import { Card, Secao, Vazio } from '@/ui/components';
 import { CardCliente } from '@/ui/CardCliente';
-import { cor, espaco } from '@/ui/theme';
+import { cor, espaco, estilosTema } from '@/ui/theme';
 
 const NOME_MES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
 
@@ -102,7 +102,7 @@ function InicioVendedor() {
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   conteudo: { padding: espaco.lg, paddingBottom: espaco.xl * 2 },
   status: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   statusTexto: { color: cor.textoSuave, fontSize: 13, flexShrink: 1 },
@@ -113,4 +113,4 @@ const estilos = StyleSheet.create({
   remessa: { flexDirection: 'row', alignItems: 'center', gap: espaco.md, marginBottom: espaco.sm },
   remessaNome: { fontSize: 15, fontWeight: '700', color: cor.texto },
   remessaDetalhe: { fontSize: 13, color: cor.textoSuave, marginTop: 2 },
-});
+}));

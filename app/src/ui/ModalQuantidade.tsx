@@ -3,7 +3,7 @@ import { KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, Tex
 import { lerDesconto, validarDesconto } from '@/domain/pedido';
 import { lerQuantidade, validarQuantidade, type RegraQuantidade } from '@/domain/quantidade';
 import { Botao } from './components';
-import { cor, espaco, raio } from './theme';
+import { cor, espaco, raio, estilosTema } from './theme';
 
 interface Props {
   visivel: boolean;
@@ -116,7 +116,7 @@ export function ModalQuantidade({ visivel, titulo, unidade, inicial, regra, conf
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   fundo: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: espaco.xl },
   caixa: { backgroundColor: cor.card, borderRadius: raio, padding: espaco.lg, gap: espaco.sm },
   titulo: { fontSize: 16, fontWeight: '700', color: cor.texto },
@@ -129,4 +129,4 @@ const estilos = StyleSheet.create({
   dica: { fontSize: 13, color: cor.textoSuave },
   erro: { fontSize: 13, color: cor.erro },
   botoes: { flexDirection: 'row', gap: espaco.sm, marginTop: espaco.sm },
-});
+}));

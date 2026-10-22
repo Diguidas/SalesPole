@@ -6,7 +6,7 @@ import { api } from '@/lib/api';
 import { useEquipe } from '@/lib/equipe';
 import { dataBR } from '@/lib/format';
 import { Card, Vazio } from './components';
-import { cor, espaco, raio } from './theme';
+import { cor, espaco, raio, estilosTema } from './theme';
 
 interface Carteira { cod_vendedor: string; nome: string | null; clientes: number }
 interface ClienteEquipe {
@@ -156,7 +156,7 @@ function ClientesDoVendedor({ vendedor, aoVoltar }: { vendedor: Carteira; aoVolt
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   buscaBox: { flexDirection: 'row', alignItems: 'center', gap: 8, margin: espaco.lg, marginTop: espaco.sm, paddingHorizontal: espaco.md, backgroundColor: cor.card, borderRadius: raio, borderWidth: 1, borderColor: cor.borda },
   busca: { flex: 1, paddingVertical: 12, fontSize: 16, color: cor.texto },
   card: { flexDirection: 'row', alignItems: 'center', gap: espaco.md, marginBottom: espaco.sm },
@@ -167,4 +167,4 @@ const estilos = StyleSheet.create({
   voltarTexto: { fontSize: 16, fontWeight: '800', color: cor.primaria, flexShrink: 1 },
   voltarDetalhe: { fontSize: 13, color: cor.textoSuave, marginLeft: 6 },
   dica: { fontSize: 13, color: cor.primaria, fontWeight: '700', marginBottom: espaco.sm },
-});
+}));

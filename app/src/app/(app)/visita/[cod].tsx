@@ -15,7 +15,7 @@ import { tirarFoto } from '@/lib/camera';
 import { diaSemanaHoje, hojeISO } from '@/lib/format';
 import { obterPosicao } from '@/lib/localizacao';
 import { Botao, Card, Carregando, Chip, Linha, Secao, Segmentado, Selo, Vazio } from '@/ui/components';
-import { cor, espaco, raio } from '@/ui/theme';
+import { cor, espaco, raio, estilosTema } from '@/ui/theme';
 
 const hora = (iso: string | null) =>
   iso ? new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—';
@@ -316,7 +316,7 @@ export default function VisitaTela() {
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   conteudo: { padding: espaco.lg, paddingBottom: espaco.xl * 2 },
   nome: { fontSize: 20, fontWeight: '800', color: cor.texto },
   titulo: { fontSize: 16, fontWeight: '700', color: cor.texto },
@@ -336,4 +336,4 @@ const estilos = StyleSheet.create({
     borderWidth: 1, borderColor: cor.borda, borderRadius: raio, paddingHorizontal: espaco.md, paddingVertical: 10,
     fontSize: 15, color: cor.texto, backgroundColor: cor.card,
   },
-});
+}));

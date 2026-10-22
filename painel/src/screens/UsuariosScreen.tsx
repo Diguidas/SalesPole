@@ -131,7 +131,7 @@ function Lista({ aba, meuEmail }: { aba: Aba; meuEmail: string }) {
         <button className="btn ok" onClick={() => abrir()}>+ Novo usuário</button>
         <button className="chip" onClick={carregar}>Atualizar</button>
       </div>
-      {aviso && <p style={{ color: '#166534', fontSize: 13 }}>{aviso}</p>}
+      {aviso && <p style={{ color: 'var(--c-ok-texto)', fontSize: 13 }}>{aviso}</p>}
       {erro && !form && <p className="erro-msg">{erro}</p>}
 
       {form && (

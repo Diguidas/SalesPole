@@ -1,6 +1,8 @@
-// Preco minimo permitido por item (trava de desconto no servidor). Mesma regra do app:
+// Preco minimo permitido por item (trava de desconto no servidor). Mesma regra do app (nucleo em shared/regras/preco.ts):
 // lista+grupo (A912) vale antes de lista (A913); o preco de tabela e levado para a unidade do pedido
 // (KG -> CX etc. pelas conversoes do produto); minimo = tabela x (1 - desconto_max/100), 2 casas.
+
+import { escolherVigente, fatorDaUnidade } from './regras/preco';
 
 export interface LinhaPrecoSrv {
   kbetr: number | null;
@@ -21,17 +23,7 @@ export interface DadosProdutoSrv {
 const arred2 = (x: number) => Math.round(Number((x * 100).toPrecision(12))) / 100;
 
 export function fatorBase(unidade: string, d: DadosProdutoSrv): number | null {
-  if (d.unidade_base && unidade === d.unidade_base) return 1;
-  const f = d.conversoes?.find((c) => c.unidade === unidade)?.fator;
-  return f && f > 0 ? f : null;
-}
-
-function escolher(linhas: LinhaPrecoSrv[], hoje: string): LinhaPrecoSrv | null {
-  return (
-    linhas
-      .filter((l) => l.datab <= hoje && l.datbi >= hoje && l.kbetr !== null && l.kbetr > 0)
-      .sort((a, b) => b.datab.localeCompare(a.datab))[0] ?? null
-  );
+  return fatorDaUnidade(unidade, d.unidade_base, (u) => d.conversoes?.find((c) => c.unidade === u)?.fator);
 }
 
 /**
@@ -45,7 +37,7 @@ export function tabelaDoItem(
   unidade: string,
   dados: DadosProdutoSrv,
 ): { valor: number; descontoMax: number } | null {
-  const l = escolher(grupos, hoje) ?? escolher(listas, hoje);
+  const l = escolherVigente(grupos, listas, hoje);
   if (!l || l.kbetr === null) return null;
   const kpein = Number(l.kpein);
   const porUnidadeDaTabela = Number(l.kbetr) / (kpein > 0 ? kpein : 1);

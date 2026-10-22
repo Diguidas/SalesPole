@@ -18,6 +18,7 @@ import { DescontoScreen } from './screens/DescontoScreen';
 import { NovaSolicitacaoScreen } from './screens/NovaSolicitacaoScreen';
 import { SolicitacaoDetalheScreen, SolicitacoesScreen } from './screens/SolicitacoesScreen';
 import { ClienteDetalheScreen } from './screens/ClienteDetalheScreen';
+import { BiScreen } from './screens/BiScreen';
 
 export function App() {
   const { carregando, sessao, usuario, erro } = useAuth();
@@ -46,6 +47,7 @@ export function App() {
         <Route path="pedidos-antecipados" element={<Navigate to="/pedidos?antecipado=1&pendentes=1" replace />} />
         <Route path="cadastros/:nome" element={semAdmin && !tem(usuario, 'comunicados') ? <Navigate to="/" replace /> : <CadastroScreen />} />
         <Route path="visitas" element={<VisitasScreen />} />
+        <Route path="bi" element={<BiScreen />} />
         <Route path="indicadores" element={<Navigate to="/" replace />} />
         <Route path="vendedores" element={<Navigate to="/usuarios" replace />} />
         <Route path="monitor" element={semAdmin ? <Navigate to="/" replace /> : <MonitorScreen />} />

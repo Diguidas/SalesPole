@@ -6,7 +6,7 @@ import { api } from '@/lib/api';
 import { dataBR, moeda } from '@/lib/format';
 import { BarChart } from '@/ui/BarChart';
 import { Card, Carregando, Linha, Secao, Selo, Vazio } from '@/ui/components';
-import { cor, espaco } from '@/ui/theme';
+import { cor, espaco, estilosTema } from '@/ui/theme';
 
 interface TituloResumo {
   nfe: string; parcela: string; status: string | null; valor: number | null; vencimento: string | null;
@@ -192,7 +192,7 @@ export default function ClienteEquipe() {
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   conteudo: { padding: espaco.lg, paddingBottom: espaco.xl * 2 },
   nome: { fontSize: 18, fontWeight: '800', color: cor.texto },
   razao: { fontSize: 13, color: cor.textoSuave, marginTop: 2 },
@@ -203,4 +203,4 @@ const estilos = StyleSheet.create({
   linhaPedido: { flexDirection: 'row', alignItems: 'center', gap: espaco.md, marginBottom: espaco.sm },
   pedido: { fontSize: 15, fontWeight: '700', color: cor.texto },
   valor: { fontSize: 15, fontWeight: '800', color: cor.primaria },
-});
+}));

@@ -10,7 +10,7 @@ import { BarChart } from '@/ui/BarChart';
 import { EquipeAnalise } from '@/ui/EquipeAnalise';
 import { Card, Secao, Selo, Vazio } from '@/ui/components';
 import { seloDoPedido } from '@/ui/status';
-import { cor, espaco, raio } from '@/ui/theme';
+import { cor, espaco, raio, estilosTema } from '@/ui/theme';
 
 const NOME_MES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
 const valorCurto = (v: number) => (v >= 1000 ? `${(v / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} mil` : String(Math.round(v)));
@@ -103,7 +103,7 @@ function Atalho({ icone, titulo, badge, neutro, onPress }: { icone: keyof typeof
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   conteudo: { padding: espaco.lg, paddingBottom: espaco.xl * 2 },
   nota: { fontSize: 12, color: cor.textoSuave, textAlign: 'center', marginTop: espaco.md },
   pendente: { flexDirection: 'row', alignItems: 'center', gap: espaco.md, marginBottom: espaco.sm },
@@ -118,4 +118,4 @@ const estilos = StyleSheet.create({
   atalhoTexto: { fontSize: 16, fontWeight: '700', color: cor.texto },
   badge: { position: 'absolute', top: 8, right: 8, minWidth: 22, height: 22, borderRadius: 11, backgroundColor: cor.erro, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
   badgeTexto: { color: '#fff', fontSize: 12, fontWeight: '700' },
-});
+}));

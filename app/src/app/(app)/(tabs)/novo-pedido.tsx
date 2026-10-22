@@ -9,7 +9,7 @@ import { listarClientes, type ClienteResumo } from '@/db/queries';
 import { haQuanto } from '@/lib/format';
 import { Card, Secao, Vazio } from '@/ui/components';
 import { CardCliente } from '@/ui/CardCliente';
-import { cor, espaco, raio } from '@/ui/theme';
+import { cor, espaco, raio, estilosTema } from '@/ui/theme';
 
 export default function NovoPedido() {
   const db = useSQLiteContext();
@@ -81,7 +81,7 @@ export default function NovoPedido() {
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   rascunho: { flexDirection: 'row', alignItems: 'center', gap: espaco.md, marginBottom: espaco.sm },
   rascunhoNome: { fontSize: 15, fontWeight: '700', color: cor.texto },
   rascunhoDetalhe: { fontSize: 13, color: cor.textoSuave, marginTop: 2 },
@@ -90,4 +90,4 @@ const estilos = StyleSheet.create({
     backgroundColor: cor.card, borderRadius: raio, borderWidth: 1, borderColor: cor.borda,
   },
   busca: { flex: 1, paddingVertical: 12, fontSize: 16, color: cor.texto },
-});
+}));

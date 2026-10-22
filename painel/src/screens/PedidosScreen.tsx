@@ -156,7 +156,7 @@ export function PedidosScreen() {
                     <td>{p.ordem}{p.notas > 0 ? <span className="suave"> · NF</span> : null}</td>
                     <td>{p.cliente ?? p.cod_cliente}{p.antecipado ? <span className="selo aviso" style={{ marginLeft: 6 }} title="Pagamento antecipado">V</span> : null}</td>
                     <td>{p.vendedor ?? '—'}</td>
-                    <td>{dataBR(p.dt_criacao)}<div className="suave" style={p.antecipado && !p.faturado && p.dias >= 3 && (p.status ?? '').toLowerCase() !== 'recusado' ? { color: '#b45309', fontWeight: 600 } : undefined}>{p.dias === 0 ? 'hoje' : `há ${p.dias} d`}</div></td>
+                    <td>{dataBR(p.dt_criacao)}<div className="suave" style={p.antecipado && !p.faturado && p.dias >= 3 && (p.status ?? '').toLowerCase() !== 'recusado' ? { color: 'var(--c-aviso)', fontWeight: 600 } : undefined}>{p.dias === 0 ? 'hoje' : `há ${p.dias} d`}</div></td>
                     <td>{dataBR(p.dt_entrega)}</td>
                     <td style={{ textAlign: 'right' }}>{moeda(p.valor)}</td>
                     <td><span className={`selo ${tomStatus(p.status)}`}>{p.status ?? '—'}</span>{p.faturado && !(p.status ?? '').toLowerCase().startsWith('faturado') ? <div className="suave">com nota fiscal</div> : null}</td>

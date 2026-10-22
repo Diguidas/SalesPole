@@ -92,7 +92,7 @@ export function CarteirasTab({ aoPedir }: { aoPedir: () => void }) {
         Escolha as carteiras (rotas) e o que atualizar. Pedidos levam cerca de 1 minuto por carteira. O histórico de 12 meses demora vários minutos por carteira: use só para completar os indicadores. As carteiras rodam uma de cada vez.
       </p>
       {erro && <p className="erro-msg">{erro}</p>}
-      {aviso && <p style={{ color: '#166534', fontSize: 13 }}>{aviso}</p>}
+      {aviso && <p style={{ color: 'var(--c-ok-texto)', fontSize: 13 }}>{aviso}</p>}
 
       <div className="barra-acoes">
         <label className="marca"><input type="checkbox" checked={recursos.carteira} onChange={(e) => setRecursos({ ...recursos, carteira: e.target.checked })} /> Carteira e clientes</label>
@@ -116,7 +116,7 @@ export function CarteirasTab({ aoPedir }: { aoPedir: () => void }) {
           <thead><tr><th style={{ width: 36 }}></th><th>Rota</th><th>Vendedor</th></tr></thead>
           <tbody>
             {visiveis.map((c) => (
-              <tr key={c.rota} onClick={() => alternar(c.rota)} style={{ cursor: 'pointer', background: rotas.has(c.rota) ? '#fff7ed' : undefined }}>
+              <tr key={c.rota} onClick={() => alternar(c.rota)} style={{ cursor: 'pointer', background: rotas.has(c.rota) ? 'var(--c-prim-fundo)' : undefined }}>
                 <td><input type="checkbox" checked={rotas.has(c.rota)} onChange={() => alternar(c.rota)} onClick={(e) => e.stopPropagation()} /></td>
                 <td>{c.rota}</td>
                 <td>{c.vendedores.join(', ')}</td>
@@ -190,7 +190,7 @@ export function AndamentoTab() {
         <>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
             <h2 style={{ margin: '0 0 10px' }}>Em andamento agora</h2>
-            {lista.ativas.length > 0 && <button className="btn" style={{ borderColor: '#dc2626', color: '#b91c1c' }} onClick={cancelar}>Cancelar tudo ({lista.ativas.length})</button>}
+            {lista.ativas.length > 0 && <button className="btn" style={{ borderColor: 'var(--c-erro)', color: 'var(--c-erro2)' }} onClick={cancelar}>Cancelar tudo ({lista.ativas.length})</button>}
           </div>
           {lista.ativas.length === 0 && !rodada?.rodando && <div className="vazio" style={{ padding: 16 }}>Nada sincronizando no momento.</div>}
           {lista.ativas.length > 0 && (
@@ -227,7 +227,7 @@ export function AndamentoTab() {
                 </>
               ) : rodada.interrompida ? (
                 <>
-                  <strong style={{ color: '#b45309' }}>A última rodada dos indicadores foi interrompida em {rodada.feitos} de {rodada.total} rotas.</strong>
+                  <strong style={{ color: 'var(--c-aviso)' }}>A última rodada dos indicadores foi interrompida em {rodada.feitos} de {rodada.total} rotas.</strong>
                   <span className="suave"> O servidor reiniciou no meio. Use "Atualizar vendedores marcados" para continuar; o que já foi baixado fica salvo.</span>
                 </>
               ) : (

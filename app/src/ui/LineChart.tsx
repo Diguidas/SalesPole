@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { cor, espaco } from './theme';
+import { cor, espaco, estilosTema } from './theme';
 
 export interface PontoGrafico {
   rotulo: string;
@@ -66,7 +66,7 @@ export function LineChart({ pontos, formato }: { pontos: PontoGrafico[]; formato
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   area: { height: ALTURA, marginBottom: espaco.xs },
   base: { position: 'absolute', left: MARGEM, right: MARGEM, height: StyleSheet.hairlineWidth, backgroundColor: cor.borda },
   segmento: { position: 'absolute', height: 2, backgroundColor: cor.primaria, borderRadius: 1 },
@@ -75,4 +75,4 @@ const estilos = StyleSheet.create({
   coluna: { flex: 1, alignItems: 'center' },
   valor: { fontSize: 10, color: cor.texto, fontWeight: '600' },
   rotulo: { fontSize: 11, color: cor.textoSuave, textTransform: 'capitalize' },
-});
+}));

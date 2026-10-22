@@ -2,7 +2,7 @@
   "name": "salespole-api",
   "version": "0.1.0",
   "private": true,
-  "description": "API NestJS do Sales Pole (forca de vendas Pole Alimentos)",
+  "description": "API NestJS do SalesPole (forca de vendas Pole Alimentos)",
   "scripts": {
     "build": "nest build",
     "start": "nest start",
@@ -11,8 +11,10 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "sync:vendedor": "nest build && node dist/cli/sync-vendedor.js",
     "historico:vendedor": "nest build && node dist/cli/historico-vendedor.js",
-    "test:push": "nest build && node test/push.flow.test.cjs",
-    "criar:usuario": "nest build && node dist/cli/criar-usuario.js"
+    "test:push": "npm run test:shared && nest build && node test/push.flow.test.cjs",
+    "criar:usuario": "nest build && node dist/cli/criar-usuario.js",
+    "shared": "node ../shared/sincronizar.mjs",
+    "test:shared": "node ../shared/sincronizar.mjs --check"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.0",

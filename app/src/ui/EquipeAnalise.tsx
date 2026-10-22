@@ -5,7 +5,7 @@ import { useEquipe } from '@/lib/equipe';
 import { moeda } from '@/lib/format';
 import { BarChart } from './BarChart';
 import { Card, Secao, Vazio } from './components';
-import { cor, espaco } from './theme';
+import { cor, espaco, estilosTema } from './theme';
 
 interface MesVenda { mes: string; valor: number; pedidos: number }
 interface VendedorVenda { cod_vendedor: string; nome: string | null; valor: number; pedidos: number; clientes: number }
@@ -76,7 +76,7 @@ export function EquipeAnalise() {
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   conteudo: { padding: espaco.lg, paddingBottom: espaco.xl * 2 },
   nota: { fontSize: 12, color: cor.textoSuave, textAlign: 'center', marginTop: espaco.md },
   nota2: { fontSize: 13, color: cor.textoSuave, marginTop: 2 },
@@ -86,4 +86,4 @@ const estilos = StyleSheet.create({
   barra: { height: 6, borderRadius: 3, backgroundColor: cor.neutroFundo, marginTop: 8, overflow: 'hidden' },
   preenchido: { height: 6, backgroundColor: cor.primaria },
   erro: { color: cor.erro, fontSize: 13, marginBottom: espaco.sm },
-});
+}));

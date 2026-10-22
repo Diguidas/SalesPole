@@ -1,4 +1,4 @@
-export type TipoCampo = 'texto' | 'area' | 'numero' | 'data' | 'bool' | 'produto' | 'select';
+export type TipoCampo = 'texto' | 'area' | 'numero' | 'data' | 'bool' | 'produto' | 'select' | 'escopo_valor' | 'classificacao';
 
 export interface Campo {
   chave: string;
@@ -8,6 +8,8 @@ export interface Campo {
   dica?: string;
   maxLength?: number;
   opcoes?: Array<{ v: string; r: string }>;
+  /** classificacao: de onde vem as opcoes (linha | grupo | categoria | marca) */
+  fonte?: string;
   /** campo so aparece quando esta funcao devolve true (recebe os valores do formulario) */
   quando?: (v: Record<string, string | boolean>) => boolean;
   /** nao pode ser editado depois de criado (ex.: codigo que e a chave) */
@@ -42,6 +44,9 @@ const ESCOPOS = [
   { v: 'vendedor', r: 'Vendedor' },
   { v: 'canal', r: 'Canal' },
   { v: 'escritorio', r: 'Escritório de vendas' },
+  { v: 'lista_preco', r: 'Lista de preço' },
+  { v: 'equipe', r: 'Equipe do vendedor' },
+  { v: 'tipo_estabelecimento', r: 'Tipo de estabelecimento' },
 ];
 
 const TIPOS_PERGUNTA = [
@@ -119,6 +124,24 @@ export const CADASTROS: Record<string, DefCadastro> = {
       { chave: 'ordem', rotulo: 'Ordem' },
     ],
   },
+  bi: {
+    titulo: 'Painéis de BI',
+    descricao: 'Links do Power BI que abrem dentro do painel (menu Comercial → BI) e/ou do app (Perfil → BI). Use o link de incorporação do relatório (Arquivo → Incorporar relatório). Quem abrir precisa ter acesso ao relatório no Power BI.',
+    nome: 'bi',
+    chave: 'id',
+    rotuloNovo: 'Novo painel de BI',
+    campos: [
+      { chave: 'nome', rotulo: 'Nome', tipo: 'texto', obrigatorio: true, maxLength: 60, dica: 'Ex.: Vendas' },
+      { chave: 'url', rotulo: 'Link do relatório', tipo: 'texto', obrigatorio: true, maxLength: 1000, dica: 'https://app.powerbi.com/...' },
+      { chave: 'onde', rotulo: 'Onde aparece', tipo: 'select', opcoes: [{ v: 'painel', r: 'Só no painel' }, { v: 'app', r: 'Só no app' }, { v: 'ambos', r: 'Painel e app' }] },
+      { chave: 'ordem', rotulo: 'Ordem', tipo: 'numero', dica: 'Menor aparece primeiro' },
+    ],
+    colunas: [
+      { chave: 'nome', rotulo: 'Nome' },
+      { chave: 'onde', rotulo: 'Onde', formatar: (v) => (v === 'ambos' ? 'Painel e app' : v === 'app' ? 'Só no app' : 'Só no painel') },
+      { chave: 'ordem', rotulo: 'Ordem' },
+    ],
+  },
   prazos: {
     titulo: 'Prazos de pagamento',
     descricao: 'Prazos que o vendedor escolhe no cadastro de cliente e o supervisor na alteração de condição de pagamento. A ordem menor aparece primeiro.',
@@ -159,12 +182,12 @@ export const CADASTROS: Record<string, DefCadastro> = {
     rotuloNovo: 'Novo incentivo',
     campos: [
       { chave: 'escopo', rotulo: 'A quem vale', tipo: 'select', opcoes: ESCOPOS },
-      { chave: 'escopo_valor', rotulo: 'Código do cliente / vendedor / canal / escritório', tipo: 'texto', maxLength: 40, obrigatorio: true, quando: (v) => !['geral', 'produto', ''].includes(String(v.escopo ?? 'geral')) },
+      { chave: 'escopo_valor', rotulo: 'Para quem (código ou opções)', tipo: 'escopo_valor', maxLength: 400, obrigatorio: true, quando: (v) => !['geral', 'produto', ''].includes(String(v.escopo ?? 'geral')) },
       { chave: 'cod_produto', rotulo: 'Produto', tipo: 'produto', dica: 'Vazio = qualquer produto', obrigatorio: false },
-      { chave: 'linha_id', rotulo: 'Linha (ID)', tipo: 'texto', maxLength: 20 },
-      { chave: 'grupo_id', rotulo: 'Grupo (ID)', tipo: 'texto', maxLength: 20 },
-      { chave: 'categoria_id', rotulo: 'Categoria (ID)', tipo: 'texto', maxLength: 20 },
-      { chave: 'marca', rotulo: 'Marca', tipo: 'texto', maxLength: 60, dica: 'Texto do cadastro do produto' },
+      { chave: 'linha_id', rotulo: 'Linha', tipo: 'classificacao', fonte: 'linha', maxLength: 20 },
+      { chave: 'grupo_id', rotulo: 'Grupo', tipo: 'classificacao', fonte: 'grupo', maxLength: 20 },
+      { chave: 'categoria_id', rotulo: 'Categoria', tipo: 'classificacao', fonte: 'categoria', maxLength: 20 },
+      { chave: 'marca', rotulo: 'Marca', tipo: 'classificacao', fonte: 'marca', maxLength: 60 },
       { chave: 'qtd_minima', rotulo: 'Quantidade mínima (caixas)', tipo: 'numero', obrigatorio: true, dica: '0 = sem mínimo' },
       { chave: 'desconto_pct', rotulo: 'Desconto automático (%)', tipo: 'numero', obrigatorio: true },
       { chave: 'desconto_extra_max_pct', rotulo: 'Extra máximo do vendedor (%)', tipo: 'numero' },
@@ -198,7 +221,7 @@ export const CADASTROS: Record<string, DefCadastro> = {
       { chave: 'mensagem', rotulo: 'Mensagem', tipo: 'area', obrigatorio: true, maxLength: 1000 },
       { chave: 'nivel', rotulo: 'Destaque', tipo: 'select', opcoes: NIVEIS_AVISO },
       { chave: 'escopo', rotulo: 'Para quem', tipo: 'select', opcoes: ESCOPOS_AVISO },
-      { chave: 'escopo_valor', rotulo: 'Código(s) do vendedor / escritório / canal', tipo: 'texto', maxLength: 400, obrigatorio: true, dica: 'Vários separados por vírgula', quando: (v) => !['geral', ''].includes(String(v.escopo ?? 'geral')) },
+      { chave: 'escopo_valor', rotulo: 'Código(s) do vendedor / escritório / canal', tipo: 'escopo_valor', maxLength: 400, obrigatorio: true, dica: 'Vários separados por vírgula', quando: (v) => !['geral', ''].includes(String(v.escopo ?? 'geral')) },
       { chave: 'vigencia_ini', rotulo: 'Mostrar a partir de', tipo: 'data', dica: 'Vazio = já' },
       { chave: 'vigencia_fim', rotulo: 'Mostrar até', tipo: 'data', dica: 'Vazio = sem fim' },
     ],
@@ -221,7 +244,7 @@ export const CADASTROS: Record<string, DefCadastro> = {
       { chave: 'opcoes', rotulo: 'Opções de resposta', tipo: 'texto', maxLength: 400, obrigatorio: true, dica: 'Separe com ponto e vírgula. Ex.: Ótimo; Bom; Ruim', quando: (v) => v.tipo === 'opcoes' },
       { chave: 'obrigatoria', rotulo: 'Obrigatória', tipo: 'bool' },
       { chave: 'escopo', rotulo: 'A quem vale', tipo: 'select', opcoes: ESCOPOS_PERGUNTA },
-      { chave: 'escopo_valor', rotulo: 'Código(s) do vendedor / escritório / canal / cliente', tipo: 'texto', maxLength: 400, obrigatorio: true, dica: 'Vários separados por vírgula', quando: (v) => !['geral', ''].includes(String(v.escopo ?? 'geral')) },
+      { chave: 'escopo_valor', rotulo: 'Código(s) do vendedor / escritório / canal / cliente', tipo: 'escopo_valor', maxLength: 400, obrigatorio: true, dica: 'Vários separados por vírgula', quando: (v) => !['geral', ''].includes(String(v.escopo ?? 'geral')) },
       { chave: 'ordem', rotulo: 'Ordem', tipo: 'numero', dica: 'Menor aparece primeiro' },
     ],
     colunas: [

@@ -4,12 +4,15 @@ import { api } from '../api';
 import { useAuth } from '../auth';
 import { Cadastro } from './CadastroScreen';
 import { CADASTROS } from './cadastros';
+import { FONTE_DO_ESCOPO, useOpcoesEscopo } from '../opcoes';
+import { FichasEscolha, SeletorMultiplo, nomesDe, type TipoSeletor } from './SeletorMultiplo';
 
+interface Faixa { qtd_minima: number | string; desconto_pct: number | string | null; brinde_qtd: number | string | null }
 interface ItemCombo { id?: string; alvo_tipo: string; alvo_valor: string; qtd_minima: number | string }
 interface Combo {
   id: string; nome: string; escopo: string; escopo_valor: string | null; beneficio: 'produto_gratis' | 'desconto_pct';
   brinde_cod_produto: string | null; brinde_qtd: number | null; tipo_bonificacao: string | null; centro_custo: string | null; desconto_pct: number | null; desconto_extra_max_pct: number;
-  repete: boolean; max_repeticoes: number | null; vigencia_ini: string | null; vigencia_fim: string | null; ativo: boolean; itens: ItemCombo[];
+  repete: boolean; max_repeticoes: number | null; faixas: Faixa[]; vigencia_ini: string | null; vigencia_fim: string | null; ativo: boolean; itens: ItemCombo[];
 }
 type Form = Omit<Combo, 'id' | 'brinde_qtd' | 'desconto_pct' | 'desconto_extra_max_pct' | 'max_repeticoes'> & {
   id?: string; brinde_qtd: string; desconto_pct: string; desconto_extra_max_pct: string; max_repeticoes: string;
@@ -21,13 +24,16 @@ const ESCOPOS = [
   { v: 'vendedor', r: 'Vendedor' },
   { v: 'canal', r: 'Canal' },
   { v: 'escritorio', r: 'Escritório de vendas' },
+  { v: 'lista_preco', r: 'Lista de preço' },
+  { v: 'equipe', r: 'Equipe do vendedor' },
+  { v: 'tipo_estabelecimento', r: 'Tipo de estabelecimento' },
 ];
 const ALVOS = [
   { v: 'produto', r: 'Produto' },
   { v: 'marca', r: 'Marca' },
-  { v: 'linha', r: 'Linha (ID)' },
-  { v: 'grupo', r: 'Grupo (ID)' },
-  { v: 'categoria', r: 'Categoria (ID)' },
+  { v: 'linha', r: 'Linha' },
+  { v: 'grupo', r: 'Grupo' },
+  { v: 'categoria', r: 'Categoria' },
 ];
 const ROTULO_ALVO = Object.fromEntries(ALVOS.map((a) => [a.v, a.r.replace(' (ID)', '')]));
 const ROTULO_ESCOPO = Object.fromEntries(ESCOPOS.map((e) => [e.v, e.r]));
@@ -37,13 +43,14 @@ const num = (v: number | string | null | undefined) => (v == null ? '' : Number(
 
 const vazio = (): Form => ({
   nome: '', escopo: 'geral', escopo_valor: '', beneficio: 'produto_gratis', brinde_cod_produto: '', brinde_qtd: '1', tipo_bonificacao: '', centro_custo: '', desconto_pct: '', desconto_extra_max_pct: '0',
-  repete: false, max_repeticoes: '', vigencia_ini: '', vigencia_fim: '', ativo: true, itens: [{ alvo_tipo: 'produto', alvo_valor: '', qtd_minima: '1' }],
+  repete: false, max_repeticoes: '', faixas: [], vigencia_ini: '', vigencia_fim: '', ativo: true, itens: [{ alvo_tipo: 'produto', alvo_valor: '', qtd_minima: '1' }],
 });
 
 const paraForm = (c: Combo): Form => ({
   ...c, escopo_valor: c.escopo_valor ?? '', brinde_cod_produto: c.brinde_cod_produto ?? '', tipo_bonificacao: c.tipo_bonificacao ?? '', centro_custo: c.centro_custo ?? '', brinde_qtd: c.brinde_qtd == null ? '1' : String(c.brinde_qtd),
   desconto_pct: c.desconto_pct == null ? '' : String(c.desconto_pct), desconto_extra_max_pct: String(c.desconto_extra_max_pct ?? 0),
   max_repeticoes: c.max_repeticoes == null ? '' : String(c.max_repeticoes), vigencia_ini: c.vigencia_ini ?? '', vigencia_fim: c.vigencia_fim ?? '',
+  faixas: (c.faixas ?? []).map((x) => ({ qtd_minima: String(x.qtd_minima), desconto_pct: x.desconto_pct == null ? '' : String(x.desconto_pct), brinde_qtd: x.brinde_qtd == null ? '' : String(x.brinde_qtd) })),
   itens: c.itens.map((i) => ({ ...i, qtd_minima: String(i.qtd_minima) })),
 });
 
@@ -66,11 +73,16 @@ export function DescontoScreen() {
 }
 
 function resumoCondicao(c: Combo) {
-  return c.itens.map((i) => `${num(i.qtd_minima)} cx ${ROTULO_ALVO[i.alvo_tipo] ?? i.alvo_tipo} ${i.alvo_valor}`).join(' + ');
+  return c.itens.map((i) => {
+    const valores = i.alvo_valor.split(',').filter(Boolean);
+    return `${num(i.qtd_minima)} cx ${ROTULO_ALVO[i.alvo_tipo] ?? i.alvo_tipo} ${valores.length > 1 ? `(um de: ${valores.join(', ')})` : valores[0] ?? ''}`;
+  }).join(' + ');
 }
 function resumoBeneficio(c: Combo) {
   const base = c.beneficio === 'produto_gratis' ? `Ganha ${num(c.brinde_qtd)} cx do produto ${c.brinde_cod_produto}` : `${num(c.desconto_pct)}% de desconto`;
-  return c.repete ? `${base} (repete${c.max_repeticoes ? `, até ${c.max_repeticoes}x` : ''})` : base;
+  const faixas = (c.faixas ?? []).map((x) => `${num(x.qtd_minima)}+ cx: ${c.beneficio === 'produto_gratis' ? `${num(x.brinde_qtd)} cx` : `${num(x.desconto_pct)}%`}`).join(' · ');
+  const texto = c.repete ? `${base} (repete${c.max_repeticoes ? `, até ${c.max_repeticoes}x` : ''})` : base;
+  return faixas ? `${texto}; faixas ${faixas}` : texto;
 }
 
 function ComboAba() {
@@ -170,6 +182,9 @@ function FormCombo({ form, setForm, salvar, salvando, erro, cancelar }: {
 }) {
   const [sugestoes, setSugestoes] = useState<Array<{ cod_produto: string; descricao: string }>>([]);
   const [buscaEm, setBuscaEm] = useState<string>('');
+  const opcoes = useOpcoesEscopo();
+  // painel de escolha multipla: qual campo esta aberto (item da condicao ou lista de preco do escopo)
+  const [escolha, setEscolha] = useState<{ alvo: 'item' | 'escopo'; n: number; tipo: TipoSeletor; titulo: string; valor: string; fonte?: string } | null>(null);
   // cadastros que o brinde usa: ele vira um pedido de bonificacao automatico (tipo = ORD_REASON, centro de custo = KOSTL)
   const [tipos, setTipos] = useState<Array<{ codigo: string; descricao: string | null; ativo?: boolean }>>([]);
   const [centros, setCentros] = useState<Array<{ codigo: string; descricao: string | null; ativo?: boolean }>>([]);
@@ -178,6 +193,7 @@ function FormCombo({ form, setForm, salvar, salvando, erro, cancelar }: {
     api<typeof centros>('/painel/cadastros/centros-custo').then(setCentros).catch(() => undefined);
   }, []);
   const set = <K extends keyof Form>(k: K, v: Form[K]) => setForm({ ...form, [k]: v });
+  const setFaixa = (n: number, parte: Partial<Faixa>) => setForm({ ...form, faixas: form.faixas.map((x, i) => (i === n ? { ...x, ...parte } : x)) });
   const setItem = (n: number, parte: Partial<ItemCombo>) => setForm({ ...form, itens: form.itens.map((x, i) => (i === n ? { ...x, ...parte } : x)) });
 
   // sugestoes de produto (codigo ou parte do nome) para o brinde e para os itens do tipo produto
@@ -202,7 +218,15 @@ function FormCombo({ form, setForm, salvar, salvando, erro, cancelar }: {
         <label className="campo"><span>Para quem vale</span>
           <select value={form.escopo} onChange={(e) => set('escopo', e.target.value)}>{ESCOPOS.map((o) => <option key={o.v} value={o.v}>{o.r}</option>)}</select>
         </label>
-        {form.escopo !== 'geral' && (
+        {FONTE_DO_ESCOPO[form.escopo] && (
+          <div className="campo"><span>{ROTULO_ESCOPO[form.escopo]}(s) *</span>
+            <button type="button" className="campo-escolha" onClick={() => setEscolha({ alvo: 'escopo', n: 0, tipo: 'opcoes', fonte: FONTE_DO_ESCOPO[form.escopo], titulo: `${ROTULO_ESCOPO[form.escopo]}: escolha uma ou mais opções`, valor: form.escopo_valor ?? '' })}>
+              <FichasEscolha valor={form.escopo_valor ?? ''} vazio="Clique para escolher" nomes={nomesDe(opcoes?.[FONTE_DO_ESCOPO[form.escopo]])} />
+            </button>
+            <input tabIndex={-1} aria-hidden style={{ opacity: 0, height: 0, padding: 0, border: 0 }} required value={form.escopo_valor ?? ''} onChange={() => undefined} />
+          </div>
+        )}
+        {form.escopo !== 'geral' && !FONTE_DO_ESCOPO[form.escopo] && (
           <label className="campo"><span>Código(s) do {ROTULO_ESCOPO[form.escopo].toLowerCase()} *</span>
             <input type="text" required maxLength={400} value={form.escopo_valor ?? ''} onChange={(e) => set('escopo_valor', e.target.value)} />
             <small className="suave">Vários códigos separados por vírgula.</small>
@@ -218,13 +242,12 @@ function FormCombo({ form, setForm, salvar, salvando, erro, cancelar }: {
           <label className="campo"><span>Tipo</span>
             <select value={it.alvo_tipo} onChange={(e) => setItem(n, { alvo_tipo: e.target.value, alvo_valor: '' })}>{ALVOS.map((o) => <option key={o.v} value={o.v}>{o.r}</option>)}</select>
           </label>
-          <label className="campo"><span>{ROTULO_ALVO[it.alvo_tipo]} *</span>
-            <input
-              type="text" required maxLength={60} value={it.alvo_valor} list={it.alvo_tipo === 'produto' ? 'combo-produtos' : undefined}
-              onChange={(e) => { setItem(n, { alvo_valor: e.target.value }); if (it.alvo_tipo === 'produto') setBuscaEm(e.target.value); }}
-              placeholder={it.alvo_tipo === 'produto' ? 'Código ou parte do nome' : undefined}
-            />
-          </label>
+          <div className="campo"><span>{ROTULO_ALVO[it.alvo_tipo]}(s) — qualquer um destes *</span>
+            <button type="button" className="campo-escolha" onClick={() => setEscolha({ alvo: 'item', n, tipo: it.alvo_tipo === 'produto' ? 'produto' : 'opcoes', fonte: it.alvo_tipo, titulo: `Escolha ${ROTULO_ALVO[it.alvo_tipo].toLowerCase()}(s) da condição`, valor: it.alvo_valor })}>
+              <FichasEscolha valor={it.alvo_valor} vazio="Clique para escolher" nomes={it.alvo_tipo === 'produto' ? undefined : nomesDe(opcoes?.[it.alvo_tipo])} />
+            </button>
+            <input tabIndex={-1} aria-hidden style={{ opacity: 0, height: 0, padding: 0, border: 0 }} required value={it.alvo_valor} onChange={() => undefined} />
+          </div>
           <label className="campo"><span>Quantidade mínima (caixas) *</span>
             <input type="text" inputMode="decimal" required value={String(it.qtd_minima)} onChange={(e) => setItem(n, { qtd_minima: e.target.value })} />
           </label>
@@ -264,15 +287,53 @@ function FormCombo({ form, setForm, salvar, salvando, erro, cancelar }: {
         ) : (
           <label className="campo"><span>Desconto (%) *</span><input type="text" inputMode="decimal" required value={form.desconto_pct} onChange={(e) => set('desconto_pct', e.target.value)} /></label>
         )}
-        <label className="campo"><span>Extra máximo do vendedor (%)</span>
-          <input type="text" inputMode="decimal" value={form.desconto_extra_max_pct} onChange={(e) => set('desconto_extra_max_pct', e.target.value)} />
-          <small className="suave">Quanto o vendedor pode dar além do combo. 0 = nenhum.</small>
-        </label>
+        {form.beneficio === 'desconto_pct' && (
+          <label className="campo"><span>Extra máximo do vendedor (%)</span>
+            <input type="text" inputMode="decimal" value={form.desconto_extra_max_pct} onChange={(e) => set('desconto_extra_max_pct', e.target.value)} />
+            <small className="suave">Quanto o vendedor pode dar além do combo. 0 = nenhum.</small>
+          </label>
+        )}
         <label className="campo campo-check"><input type="checkbox" checked={form.repete} onChange={(e) => set('repete', e.target.checked)} />Repete a cada combo completo</label>
         {form.repete && (
           <label className="campo"><span>Máximo de repetições</span><input type="text" inputMode="numeric" value={form.max_repeticoes} onChange={(e) => set('max_repeticoes', e.target.value.replace(/\D/g, ''))} /><small className="suave">Vazio = sem limite.</small></label>
         )}
       </div>
+
+      {!form.repete && (
+        <>
+          <h3 style={{ margin: '16px 0 4px' }}>Faixas (opcional)</h3>
+          <p className="suave" style={{ margin: '0 0 8px' }}>O benefício sobe conforme o total de caixas dos itens da condição. Sem faixa atingida vale o benefício acima.</p>
+          {form.faixas.map((fx, n) => (
+            <div key={n} className="form-grade" style={{ marginBottom: 8, alignItems: 'end' }}>
+              <label className="campo"><span>A partir de (caixas) *</span>
+                <input type="text" inputMode="decimal" required value={String(fx.qtd_minima)} onChange={(e) => setFaixa(n, { qtd_minima: e.target.value })} />
+              </label>
+              {form.beneficio === 'produto_gratis' ? (
+                <label className="campo"><span>Brinde (caixas) *</span>
+                  <input type="text" inputMode="decimal" required value={String(fx.brinde_qtd ?? '')} onChange={(e) => setFaixa(n, { brinde_qtd: e.target.value })} />
+                </label>
+              ) : (
+                <label className="campo"><span>Desconto (%) *</span>
+                  <input type="text" inputMode="decimal" required value={String(fx.desconto_pct ?? '')} onChange={(e) => setFaixa(n, { desconto_pct: e.target.value })} />
+                </label>
+              )}
+              <div><button type="button" className="btn" onClick={() => setForm({ ...form, faixas: form.faixas.filter((_, i) => i !== n) })}>Remover</button></div>
+            </div>
+          ))}
+          {form.faixas.length < 10 && <button type="button" className="btn" onClick={() => setForm({ ...form, faixas: [...form.faixas, { qtd_minima: '', desconto_pct: '', brinde_qtd: '' }] })}>+ Faixa</button>}
+        </>
+      )}
+
+      {escolha && (
+        <SeletorMultiplo
+          titulo={escolha.titulo} tipo={escolha.tipo} valor={escolha.valor} opcoes={escolha.fonte && opcoes ? opcoes[escolha.fonte] ?? [] : null} aoFechar={() => setEscolha(null)}
+          aoConfirmar={(csv) => {
+            if (escolha.alvo === 'escopo') set('escopo_valor', csv);
+            else setItem(escolha.n, { alvo_valor: csv });
+            setEscolha(null);
+          }}
+        />
+      )}
 
       {erro && <p className="erro-msg">{erro}</p>}
       <div className="chips" style={{ marginTop: 12 }}>

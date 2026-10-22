@@ -72,7 +72,10 @@ const LOTE_DB = 200;
 const LOTES_EM_PARALELO = 4;
 /** Botao "Sincronizar agora": rota atualizada ha menos que isso e pulada (retoma uma rodada interrompida). */
 const RETOMAR_JA_ATUALIZADA_MIN = 120;
-const LOTE_ORDENS = 150; // ordens por chamada de itens (o ABAP aceita ate 300)
+/** Itens de ordens que o SAP vai ATUALIZAR antes (SUBMIT zsdr124): pesado, lote pequeno (150 ja estourou o timeout de ~60 s do gateway). */
+const LOTE_ORDENS_ATUALIZANDO = 40;
+/** Itens so lidos da ZSDT139 como estao (ordens ainda sem itens, fora dos status marcados): leitura barata, o ABAP aceita ate 300. */
+const LOTE_ORDENS_LEITURA = 150;
 const JANELA_REMESSAS_DIAS = 14;
 
 @Injectable()
@@ -275,25 +278,52 @@ export class SyncService {
       return pedidos.length;
     }
 
-    // itens: so das ordens novas ou que ainda mudam (a funcao SQL decide)
-    const { data, error } = await this.sb.rpc('fn_ordens_para_itens', { p_rota: rota, p_dias: dias });
+    // itens: das ordens ainda sem itens (leitura simples) e das que estao num status marcado no painel
+    // (parametro status_atualizar_sync): so essas pedem ao SAP para atualizar o ciclo antes (atualizar=X)
+    const status = await this.statusParaAtualizar();
+    const { data, error } = await this.sb.rpc('fn_ordens_para_itens', { p_rota: rota, p_dias: dias, ...(status ? { p_status: status } : {}) });
     if (error) throw error;
-    const ordens = ((data ?? []) as Array<{ ordem: string }>).map((o) => o.ordem);
+    const linhasOrdens = (data ?? []) as Array<{ ordem: string; atualizar: boolean }>;
+    const lotes: Array<{ ordens: string[]; atualizar: boolean }> = [];
+    for (const atualizar of [true, false]) {
+      const ordens = linhasOrdens.filter((o) => !!o.atualizar === atualizar).map((o) => o.ordem);
+      const tam = atualizar ? LOTE_ORDENS_ATUALIZANDO : LOTE_ORDENS_LEITURA;
+      for (let i = 0; i < ordens.length; i += tam) lotes.push({ ordens: ordens.slice(i, i + tam), atualizar });
+    }
 
+    // um lote que falha (depois de uma nova tentativa) nao derruba os demais: o que ficou sem itens volta na proxima rodada
     let totalItens = 0;
-    for (let i = 0; i < ordens.length; i += LOTE_ORDENS) {
-      const lote = ordens.slice(i, i + LOTE_ORDENS);
-      const it = await this.sap.get<SapItensResp>('itens', {
-        codvendedor: codVendedor,
-        ordens: lote.join(','),
-      });
-      const linhas = this.linhasItens(it, inicio);
-      await this.upsert('pedido_itens_sap', linhas, 'ordem,item');
-      totalItens += linhas.length;
+    let lotesFalhos = 0;
+    let primeiroErro: unknown = null;
+    for (const lote of lotes) {
+      if (deveParar?.()) throw new Error('Cancelada pelo usuario');
+      try {
+        const it = await this.comTentativas(() =>
+          this.sap.get<SapItensResp>('itens', { codvendedor: codVendedor, ordens: lote.ordens.join(','), ...(lote.atualizar ? { atualizar: 'X' } : {}) }),
+        );
+        const linhas = this.linhasItens(it, inicio);
+        await this.upsert('pedido_itens_sap', linhas, 'ordem,item');
+        totalItens += linhas.length;
+      } catch (e) {
+        lotesFalhos++;
+        primeiroErro ??= e;
+        this.logger.warn(`Rota ${rota}: itens de ${lote.ordens.length} ordens falharam (${(e as Error).message.slice(0, 120)}); seguindo`);
+      }
     }
 
     this.logger.log(`Rota ${rota}: ${pedidos.length} pedidos, ${totalItens} itens`);
+    if (lotesFalhos) {
+      throw new Error(`itens: ${lotesFalhos} de ${lotes.length} lotes falharam (os demais foram gravados): ${(primeiroErro as Error).message}`);
+    }
     return pedidos.length;
+  }
+
+  /** Status marcados no painel (parametro status_atualizar_sync); undefined = usa o padrao da funcao SQL. */
+  private async statusParaAtualizar(): Promise<string[] | undefined> {
+    const { data, error } = await this.sb.from('parametros').select('valor').eq('chave', 'status_atualizar_sync').maybeSingle();
+    if (error) throw error;
+    const v = (data as { valor?: unknown } | null)?.valor;
+    return Array.isArray(v) ? v.map(String) : undefined;
   }
 
   private linhaPedido(p: NonNullable<SapPedidosResp['pedidos']>[number], inicio: string) {
@@ -332,6 +362,9 @@ export class SyncService {
         valor_unitario: num(x.valor_unitario),
         recusa: txt(x.recusa),
         cod_recusa: txt(x.cod_recusa),
+        situacao: txt(x.situacao),
+        qtd_faturada: num(x.qtd_faturada),
+        valor_faturado: num(x.valor_faturado),
         synced_at: inicio,
       })),
     );
@@ -349,7 +382,7 @@ export class SyncService {
     const pedido = this.linhaPedido(achado, inicio);
     await this.upsert('pedidos_sap', [pedido], 'ordem');
 
-    const it = await this.comTentativas(() => this.sap.get<SapItensResp>('itens', { codvendedor: codVendedor, ordens: ordem }));
+    const it = await this.comTentativas(() => this.sap.get<SapItensResp>('itens', { codvendedor: codVendedor, ordens: ordem, atualizar: 'X' }));
     const itens = this.linhasItens(it, inicio);
     await this.upsert('pedido_itens_sap', itens, 'ordem,item');
     return { pedido, itens };

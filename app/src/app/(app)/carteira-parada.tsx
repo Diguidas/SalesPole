@@ -7,7 +7,7 @@ import { carteiraParada, type ClienteParado } from '@/db/queries';
 import { dataBR, diasAtras, hojeISO, NOME_DIA_CURTO } from '@/lib/format';
 import { useSync } from '@/lib/sync-context';
 import { Card, Chip, Selo, Vazio } from '@/ui/components';
-import { cor, espaco } from '@/ui/theme';
+import { cor, espaco, estilosTema } from '@/ui/theme';
 
 const FAIXAS = [15, 30, 60, 90, 180] as const;
 
@@ -71,9 +71,9 @@ export default function CarteiraParada() {
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   linha: { flexDirection: 'row', alignItems: 'center', gap: espaco.md, marginBottom: espaco.sm },
   nome: { fontSize: 15, fontWeight: '700', color: cor.texto },
   suave: { fontSize: 13, color: cor.textoSuave },
-});
+}));

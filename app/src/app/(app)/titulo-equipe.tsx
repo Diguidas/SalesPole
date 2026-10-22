@@ -3,7 +3,7 @@ import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { Alert, Linking, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { dataBR, moeda } from '@/lib/format';
 import { Botao, Card, Linha, Selo } from '@/ui/components';
-import { cor, espaco } from '@/ui/theme';
+import { cor, espaco, estilosTema } from '@/ui/theme';
 
 /** Título visto pelo supervisor/gerente (modo equipe): valores, datas e atalhos para boleto, DANFE e pedido. Os dados vêm da ficha do cliente. */
 export default function TituloEquipe() {
@@ -46,7 +46,7 @@ export default function TituloEquipe() {
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   conteudo: { padding: espaco.lg, paddingBottom: espaco.xl * 2 },
   cliente: { fontSize: 18, fontWeight: '800', color: cor.texto },
   selos: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: espaco.sm },
@@ -54,4 +54,4 @@ const estilos = StyleSheet.create({
   acoes: { marginTop: espaco.lg, gap: espaco.sm },
   semLink: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   semLinkTexto: { color: cor.textoSuave, fontSize: 14 },
-});
+}));

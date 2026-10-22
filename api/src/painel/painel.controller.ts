@@ -121,10 +121,16 @@ export class PainelController {
     return this.catalogo.produtos(cliente, q);
   }
 
+  @Get('pedido-novo/sugestoes')
+  @Permissoes('criar_pedido')
+  sugestoesParaPedido(@Req() req: { usuarioPainel: UsuarioPainel }, @Query('vendedor') vendedor = '', @Query('cliente') cliente = '') {
+    return this.catalogo.sugestoes(vendedor, cliente, req.usuarioPainel.escopo);
+  }
+
   @Post('pedido-novo/cotar')
   @Permissoes('criar_pedido')
-  cotarPedido(@Req() req: { usuarioPainel: UsuarioPainel }, @Body() corpo: { vendedor?: string; cliente?: string; itens?: unknown }) {
-    return this.catalogo.cotar(String(corpo?.vendedor ?? ''), String(corpo?.cliente ?? ''), corpo?.itens, req.usuarioPainel.escopo);
+  cotarPedido(@Req() req: { usuarioPainel: UsuarioPainel }, @Body() corpo: { vendedor?: string; cliente?: string; itens?: unknown; tipo?: string }) {
+    return this.catalogo.cotar(String(corpo?.vendedor ?? ''), String(corpo?.cliente ?? ''), corpo?.itens, req.usuarioPainel.escopo, corpo?.tipo === 'bonificacao' ? 'bonificacao' : 'venda');
   }
 
   @Post('pedido-novo/carteira')
@@ -140,6 +146,16 @@ export class PainelController {
   }
 
   // ---- gerencial: indicadores de vendas (todos veem) e escolha dos vendedores (so admin) ----
+  @Get('indicadores/visitas')
+  visitasResumo(@Req() req: { usuarioPainel: UsuarioPainel }, @Query('ini') ini?: string, @Query('fim') fim?: string) {
+    return this.indicadores.visitas(ini, fim, req.usuarioPainel.escopo);
+  }
+
+  @Get('indicadores/rankings')
+  rankings(@Req() req: { usuarioPainel: UsuarioPainel }, @Query('ini') ini?: string, @Query('fim') fim?: string, @Query('limite') limite?: string) {
+    return this.indicadores.rankings(ini, fim, limite, req.usuarioPainel.escopo);
+  }
+
   @Get('indicadores')
   verIndicadores(@Req() req: { usuarioPainel: UsuarioPainel }, @Query('ini') ini?: string, @Query('fim') fim?: string) {
     return this.indicadores.vendas(ini, fim, req.usuarioPainel.escopo);
@@ -290,6 +306,11 @@ export class PainelController {
   @Get('catalogo-produtos/:cod')
   produtoDetalhe(@Param('cod') cod: string) {
     return this.produtosPainel.produto(cod);
+  }
+
+  @Get('opcoes-escopo')
+  opcoesEscopo() {
+    return this.produtosPainel.opcoesEscopo();
   }
 
   @Get('listas-preco')

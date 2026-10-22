@@ -6,13 +6,13 @@ import { avisosNaoLidos, marcarAvisoLido, type Aviso } from '@/db/avisos';
 import { useDados } from '@/db/hooks';
 import { hojeISO } from '@/lib/format';
 import { Botao } from './components';
-import { cor, espaco, raio } from './theme';
+import { cor, espaco, raio, estilosTema } from './theme';
 
-const NIVEIS: Record<string, { icone: keyof typeof Ionicons.glyphMap; cor: string; fundo: string; rotulo: string }> = {
-  info: { icone: 'megaphone', cor: cor.primaria, fundo: '#FFF1E5', rotulo: 'Aviso' },
+const niveis = (): Record<string, { icone: keyof typeof Ionicons.glyphMap; cor: string; fundo: string; rotulo: string }> => ({
+  info: { icone: 'megaphone', cor: cor.primaria, fundo: cor.primariaFundo, rotulo: 'Aviso' },
   importante: { icone: 'alert-circle', cor: cor.aviso, fundo: cor.avisoFundo, rotulo: 'Importante' },
   urgente: { icone: 'warning', cor: cor.erro, fundo: cor.erroFundo, rotulo: 'Urgente' },
-};
+});
 
 /**
  * Pop-up dos avisos que o painel mandou para o vendedor. Mostra um de cada vez, do mais urgente ao menos;
@@ -40,7 +40,8 @@ export function AvisosPopup() {
 
   const aviso = fila[0];
   if (!aviso) return null;
-  const n = NIVEIS[aviso.nivel] ?? NIVEIS.info;
+  const mapa = niveis();
+  const n = mapa[aviso.nivel] ?? mapa.info;
   const posicao = total - fila.length + 1;
 
   async function entendi() {
@@ -72,7 +73,7 @@ export function AvisosPopup() {
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   fundo: { flex: 1, backgroundColor: 'rgba(15,23,42,.55)', justifyContent: 'center', padding: espaco.xl },
   cartao: { backgroundColor: cor.card, borderRadius: raio + 6, overflow: 'hidden', shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 12 },
   topo: { alignItems: 'center', paddingTop: espaco.xl, paddingBottom: espaco.lg, gap: espaco.sm },
@@ -81,4 +82,4 @@ const estilos = StyleSheet.create({
   corpo: { padding: espaco.xl, gap: espaco.lg },
   titulo: { fontSize: 20, fontWeight: '800', color: cor.texto, textAlign: 'center' },
   mensagem: { fontSize: 15, lineHeight: 22, color: cor.texto, textAlign: 'center' },
-});
+}));

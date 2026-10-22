@@ -4,7 +4,7 @@ import { SUPABASE } from '../supabase/supabase.module';
 
 type Corpo = Record<string, unknown>;
 
-const ESCOPOS = ['geral', 'cliente', 'vendedor', 'canal', 'escritorio'];
+const ESCOPOS = ['geral', 'cliente', 'vendedor', 'canal', 'escritorio', 'lista_preco', 'equipe', 'tipo_estabelecimento'];
 const ALVOS = ['produto', 'linha', 'grupo', 'categoria', 'marca'];
 const erro = (m: string) => new UnprocessableEntityException(m);
 
@@ -58,7 +58,7 @@ export class CombosService {
     const escopo = texto(b, 'escopo', 'Para quem', 20) ?? 'geral';
     if (!ESCOPOS.includes(escopo)) throw erro('Escopo invalido');
     const escopoValor = texto(b, 'escopo_valor', 'Codigos', 400);
-    if (escopo !== 'geral' && !escopoValor) throw erro('Informe o(s) codigo(s) do cliente, vendedor, canal ou escritorio');
+    if (escopo !== 'geral' && !escopoValor) throw erro('Informe o(s) codigo(s) do cliente, vendedor, canal, escritorio ou lista de preco');
 
     const beneficio = texto(b, 'beneficio', 'Beneficio', 20, true)!;
     if (!['produto_gratis', 'desconto_pct'].includes(beneficio)) throw erro('Beneficio invalido');
@@ -95,10 +95,25 @@ export class CombosService {
       if (!ALVOS.includes(alvo)) throw erro(`Item ${n + 1}: tipo invalido`);
       return {
         alvo_tipo: alvo,
-        alvo_valor: texto(x, 'alvo_valor', `Item ${n + 1}: valor`, 60, true)!,
+        // varios materiais no mesmo item: codigos separados por virgula, sem repeticao
+        alvo_valor: [...new Set(texto(x, 'alvo_valor', `Item ${n + 1}: valor`, 1000, true)!.split(/[,;]+/).map((v) => v.trim()).filter(Boolean))].join(','),
         qtd_minima: numero(x.qtd_minima, `Item ${n + 1}: quantidade minima`, { min: 0.001, max: 999999, obrigatorio: true })!,
       };
     });
+
+    // faixas: degraus do beneficio pelo total de caixas da condicao (so combo sem repeticao)
+    const faixasBrutas = Array.isArray(b.faixas) ? (b.faixas as Corpo[]) : [];
+    if (faixasBrutas.length && repete) throw erro('Faixas nao valem em combo que se repete');
+    if (faixasBrutas.length > 10) throw erro('No maximo 10 faixas');
+    const faixas = faixasBrutas
+      .map((x, n) => {
+        const qtd = numero(x.qtd_minima, `Faixa ${n + 1}: quantidade minima`, { min: 0.001, max: 999999, obrigatorio: true })!;
+        const pct = gratis ? null : numero(x.desconto_pct, `Faixa ${n + 1}: desconto %`, { min: 0.01, max: 100, obrigatorio: true });
+        const qtdBrinde = gratis ? numero(x.brinde_qtd, `Faixa ${n + 1}: quantidade do brinde`, { min: 0.001, max: 99999, obrigatorio: true }) : null;
+        return { qtd_minima: qtd, desconto_pct: pct, brinde_qtd: qtdBrinde };
+      })
+      .sort((a, c) => a.qtd_minima - c.qtd_minima);
+    for (let i = 1; i < faixas.length; i++) if (faixas[i].qtd_minima === faixas[i - 1].qtd_minima) throw erro('Duas faixas com a mesma quantidade minima');
 
     const linha = {
       nome: texto(b, 'nome', 'Nome do combo', 80, true),
@@ -110,9 +125,10 @@ export class CombosService {
       tipo_bonificacao: tipoBonif,
       centro_custo: centroCusto,
       desconto_pct: desconto,
-      desconto_extra_max_pct: numero(b.desconto_extra_max_pct, 'Extra maximo %', { min: 0, max: 100 }) ?? 0,
+      desconto_extra_max_pct: gratis ? 0 : numero(b.desconto_extra_max_pct, 'Extra maximo %', { min: 0, max: 100 }) ?? 0,
       repete,
       max_repeticoes: maxRep,
+      faixas,
       vigencia_ini: ini,
       vigencia_fim: fim,
       ativo: b.ativo == null ? true : b.ativo === true || b.ativo === 'true',

@@ -1,4 +1,4 @@
-# Sales Pole
+# SalesPole
 
 Força de vendas da Pole Alimentos: app mobile (Expo) + API (NestJS) + Supabase + SAP.
 
@@ -12,6 +12,12 @@ salespole/
 
 Fluxo: **SAP → (API, jobs) → Supabase → (API, /sync/pull) → SQLite do celular**, e
 **celular → (API, /pedidos/push) → SAP**. O app só fala com a API.
+
+## Codigo compartilhado (`shared/`)
+App, API e painel precisam das mesmas regras (preco, incentivo, combo) e do mesmo PDF. Edite **so** em `shared/` e rode
+`npm run shared` em `app/` ou `api/` para copiar para dentro de cada projeto (cada um continua compilando sozinho). As copias
+tem o cabecalho "GERADO"; `npm run test:shared` (ja incluido em `test:dominio` e `test:push`) falha se alguma divergir.
+O que e so de um lado fica fora: `pedido.*.ts` (conferencia no servidor) e `app/src/domain/*` (carrinho).
 
 ## Subir tudo (desenvolvimento)
 

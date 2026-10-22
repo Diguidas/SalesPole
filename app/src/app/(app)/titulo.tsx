@@ -5,7 +5,7 @@ import { useDados } from '@/db/hooks';
 import { obterTitulo } from '@/db/queries';
 import { dataBR, moeda } from '@/lib/format';
 import { Botao, Card, Carregando, Linha, Selo, Vazio } from '@/ui/components';
-import { cor, espaco } from '@/ui/theme';
+import { cor, espaco, estilosTema } from '@/ui/theme';
 
 /** Detalhe de um titulo (parcela): valores, datas, ordem de origem, DANFE e boleto. */
 export default function TituloTela() {
@@ -60,7 +60,7 @@ export default function TituloTela() {
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   conteudo: { padding: espaco.lg, paddingBottom: espaco.xl * 2 },
   cliente: { fontSize: 18, fontWeight: '800', color: cor.texto },
   selos: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: espaco.sm },
@@ -68,4 +68,4 @@ const estilos = StyleSheet.create({
   acoes: { marginTop: espaco.lg, gap: espaco.sm },
   semLink: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   semLinkTexto: { color: cor.textoSuave, fontSize: 14 },
-});
+}));

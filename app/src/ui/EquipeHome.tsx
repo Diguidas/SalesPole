@@ -6,7 +6,7 @@ import { api } from '@/lib/api';
 import { useEquipe } from '@/lib/equipe';
 import { moeda } from '@/lib/format';
 import { Card, Secao, Vazio } from './components';
-import { cor, espaco, raio } from './theme';
+import { cor, espaco, raio, estilosTema } from './theme';
 
 interface Contagem { planejadas: number; realizadas: number; em_andamento: number; com_venda: number }
 interface LinhaVendedor extends Contagem { cod_vendedor: string; nome: string | null; escritorio: string | null; equipe: string | null }
@@ -109,7 +109,7 @@ export function EquipeHome() {
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   conteudo: { padding: espaco.lg, paddingBottom: espaco.xl * 2, gap: espaco.sm },
   rotulo: { fontSize: 13, color: cor.textoSuave },
   grande: { fontSize: 28, fontWeight: '800', color: cor.primaria, marginTop: 2 },
@@ -121,4 +121,4 @@ const estilos = StyleSheet.create({
   semRoteiro: { fontSize: 13, color: cor.textoSuave, marginTop: espaco.sm },
   dica: { fontSize: 13, color: cor.textoSuave, textAlign: 'center', marginTop: espaco.lg },
   erro: { color: cor.erro, fontSize: 13 },
-});
+}));

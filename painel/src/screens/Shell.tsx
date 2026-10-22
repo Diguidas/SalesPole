@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
-import { Settings, UsersRound, ListOrdered, House, PlusCircle, Activity, Users, MapPinCheck, SlidersHorizontal, CalendarDays, ChevronDown, Gift, LogOut, Package, Percent, Star, Tag, Landmark, Boxes, ScrollText, Megaphone, FilePlus2, Clock, UserX } from 'lucide-react';
+import { Settings, UsersRound, ListOrdered, House, PlusCircle, Activity, Users, MapPinCheck, SlidersHorizontal, CalendarDays, ChevronDown, Gift, LogOut, ChartColumnBig, Moon, Sun, Package, Percent, Star, Tag, Landmark, Boxes, ScrollText, Megaphone, FilePlus2, Clock, UserX } from 'lucide-react';
 import { ehHierarquia, tem, useAuth } from '../auth';
 import { GavetasProvider } from '../gavetas';
+import { useTema } from '../tema';
 import logo from '../assets/salespole.png';
 import poletech from '../assets/poletech.png';
 
@@ -27,6 +28,7 @@ const MENU: Array<Tela | Modulo> = [
       { para: '/produtos', rotulo: 'Produtos', icone: <Boxes size={16} strokeWidth={2} /> },
       { para: '/listas-preco', rotulo: 'Listas de preço', icone: <ScrollText size={16} strokeWidth={2} /> },
       { para: '/visitas', rotulo: 'Visitas', icone: <MapPinCheck size={16} strokeWidth={2} /> },
+      { para: '/bi', rotulo: 'BI', icone: <ChartColumnBig size={16} strokeWidth={2} /> },
     ],
   },
   {
@@ -42,6 +44,7 @@ const MENU: Array<Tela | Modulo> = [
       { para: '/cadastros/perguntas-visita', rotulo: 'Perguntas da visita', icone: <MapPinCheck size={16} strokeWidth={2} /> },
       { para: '/cadastros/prazos', rotulo: 'Prazos de pagamento', icone: <Clock size={16} strokeWidth={2} /> },
       { para: '/cadastros/motivos-exclusao', rotulo: 'Motivos de exclusão', icone: <UserX size={16} strokeWidth={2} /> },
+      { para: '/cadastros/bi', rotulo: 'Painéis de BI', icone: <ChartColumnBig size={16} strokeWidth={2} /> },
       { para: '/cadastros/feriados', rotulo: 'Feriados', icone: <CalendarDays size={16} strokeWidth={2} /> },
     ],
   },
@@ -67,6 +70,7 @@ const iniciais = (nome: string) => {
 
 export function Shell() {
   const { usuario, sair } = useAuth();
+  const [tema, alternarTema] = useTema();
   const { pathname } = useLocation();
   const [aberto, setAberto] = useState<string | null>(null); // modulo com a lista aberta (ou 'usuario')
   const barra = useRef<HTMLElement>(null);
@@ -98,7 +102,8 @@ export function Shell() {
     <GavetasProvider>
     <div className="shell">
       <header className="topbar" ref={barra}>
-        <img className="topbar-logo" src={logo} alt="Sales Pole" />
+        <img className="topbar-logo" src={logo} alt="SalesPole" />
+        <span className="topbar-nome">Painel</span>
         <nav className="topnav">
           {MENU.filter(moduloVisivel).map((m) =>
             m.tipo === 'tela' ? (
@@ -150,6 +155,10 @@ export function Shell() {
           {aberto === 'usuario' && (
             <div className="lista direita" role="menu">
               <div className="opcao-info" title={usuario?.email}>{usuario?.email}</div>
+              <button className="opcao" role="menuitem" onClick={alternarTema}>
+                {tema === 'escuro' ? <Sun size={14} strokeWidth={2} /> : <Moon size={14} strokeWidth={2} />}
+                {tema === 'escuro' ? 'Tema claro' : 'Tema escuro'}
+              </button>
               <button className="opcao perigo" role="menuitem" onClick={sair}>
                 <LogOut size={14} strokeWidth={2} />
                 Sair

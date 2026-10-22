@@ -2,7 +2,7 @@ import { ReactNode } from 'react';
 import { KeyboardTypeOptions, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Segmentado } from './components';
 import { Dropdown, OpcaoDropdown } from './Dropdown';
-import { cor, espaco, raio } from './theme';
+import { cor, espaco, raio, estilosTema } from './theme';
 
 /** Bloco de formulario com titulo (ex.: "Informacoes de endereco"). */
 export function Bloco({ titulo, children }: { titulo: string; children: ReactNode }) {
@@ -100,7 +100,7 @@ export function LinhaToque({ titulo, detalhe, onPress }: { titulo: string; detal
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   bloco: { backgroundColor: cor.card, borderRadius: raio, padding: espaco.lg, gap: espaco.md, borderWidth: StyleSheet.hairlineWidth, borderColor: cor.borda },
   blocoTitulo: { fontSize: 13, fontWeight: '800', color: cor.primaria, textTransform: 'uppercase', letterSpacing: 0.5 },
   rotulo: { fontSize: 13, color: cor.textoSuave, fontWeight: '600' },
@@ -109,4 +109,4 @@ const estilos = StyleSheet.create({
     fontSize: 15, color: cor.texto, backgroundColor: cor.card,
   },
   toque: { backgroundColor: cor.card, borderRadius: raio, padding: espaco.lg, borderWidth: StyleSheet.hairlineWidth, borderColor: cor.borda },
-});
+}));

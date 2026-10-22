@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, Text, View } from 'react-native';
 import type { Combo, FaltaCombo, ItemCondicao, ResultadoCombos } from '@/domain/combo';
 import { numero } from '@/lib/format';
-import { cor, espaco, raio } from './theme';
+import { cor, espaco, raio, estilosTema } from './theme';
 
 const ROTULO_ALVO: Record<string, string> = { produto: 'do produto', marca: 'da marca', linha: 'da linha', grupo: 'do grupo', categoria: 'da categoria' };
 
@@ -54,10 +54,10 @@ export function CombosResumo({ resultado, brindes }: { resultado: ResultadoCombo
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   caixa: { flexDirection: 'row', gap: espaco.md, alignItems: 'center', borderRadius: raio - 4, padding: espaco.md },
   ok: { backgroundColor: cor.okFundo },
   aviso: { backgroundColor: cor.avisoFundo },
   titulo: { fontSize: 14, fontWeight: '700' },
   texto: { fontSize: 13, color: cor.texto, marginTop: 2 },
-});
+}));

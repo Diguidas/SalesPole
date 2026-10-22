@@ -10,7 +10,7 @@ export class ErroApi extends Error {
   }
 }
 
-/** Chama a API do Sales Pole com o token do login Microsoft (Supabase). */
+/** Chama a API do SalesPole com o token do login Microsoft (Supabase). */
 export async function api<T>(caminho: string, opcoes: { method?: 'GET' | 'POST'; body?: unknown } = {}): Promise<T> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;

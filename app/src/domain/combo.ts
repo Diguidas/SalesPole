@@ -1,6 +1,8 @@
 // Combos de desconto (cadastrados no painel, tela Desconto): o pedido precisa ter certos itens (a CONDICAO) para o
 // cliente ganhar um BENEFICIO: um produto de brinde (item de preco zero) ou um desconto % nos itens da condicao.
-// Mesma regra do servidor (api/src/pedidos/pedido.combo.ts): se mudar uma, mude a outra.
+// Cada item da condicao aceita VARIOS materiais (alvo_valor com codigos separados por virgula = qualquer um deles) e
+// o combo (sem repeticao) pode ter FAIXAS: o beneficio sobe pelo total de caixas dos itens da condicao.
+// O nucleo do calculo vive em shared/regras/combo.ts e e o MESMO da API; aqui ficam os tipos e o carrinho do app.
 //
 // Regras do calculo:
 //  - Cada item da condicao e produto | marca | linha | grupo | categoria, com a quantidade minima (em caixas).
@@ -13,8 +15,12 @@
 //  - Os itens de brinde do pedido (brinde = true) nunca entram na condicao.
 
 import type { Classificacao, ContextoIncentivo } from './incentivo';
+import { avaliarCondicao, beneficioDaFaixa, registrarDescontoCombo, semSubstituidos, vezesDoCombo, faixaAtingida, itemCasa } from './regras/combo';
+import { escopoServe } from './regras/incentivo';
 import type { ItemPedido } from './pedido';
 import { formatarQuantidade, lerQuantidade } from './quantidade';
+
+export { faixaAtingida, itemCasa };
 
 export type AlvoTipo = 'produto' | 'marca' | 'linha' | 'grupo' | 'categoria';
 
@@ -23,6 +29,9 @@ export interface ItemCondicao {
   alvo_valor: string;
   qtd_minima: number;
 }
+
+export type { FaixaCombo } from './regras/combo';
+import type { FaixaCombo } from './regras/combo';
 
 export interface Combo {
   id: string;
@@ -38,6 +47,8 @@ export interface Combo {
   desconto_extra_max_pct: number;
   repete: boolean;
   max_repeticoes: number | null;
+  /** degraus do beneficio pelo total de caixas da condicao (so combo sem repeticao) */
+  faixas?: FaixaCombo[];
   itens: ItemCondicao[];
 }
 
@@ -47,6 +58,9 @@ export interface AplicacaoCombo {
   vezes: number;
   /** produtos do pedido que formaram a condicao */
   produtos: string[];
+  /** total de caixas dos itens da condicao e a faixa atingida (se o combo tem faixas) */
+  total: number;
+  faixa: FaixaCombo | null;
 }
 
 export interface BrindeCombo {
@@ -71,51 +85,10 @@ export interface ResultadoCombos {
   incompletos: FaltaCombo[];
 }
 
-const norm = (tipo: string, v: string | null | undefined): string => {
-  const t = (v ?? '').trim().toLowerCase();
-  // IDs do SAP (NUMC) podem vir com zeros a esquerda; a marca e texto
-  return tipo === 'marca' || tipo === 'produto' ? t : t.replace(/^0+(?=\d)/, '');
-};
-
 /** O combo vale para quem esta comprando? (so o escopo; a vigencia o servidor ja filtrou) */
 export function comboServe(c: Combo, ctx: ContextoIncentivo): boolean {
-  switch (c.escopo) {
-    case 'geral':
-      return true;
-    case 'cliente':
-      return (c.escopo_valor ?? '').split(',').includes(ctx.codCliente);
-    case 'vendedor':
-      return (c.escopo_valor ?? '').split(',').includes(ctx.codVendedor);
-    case 'canal':
-      return (c.escopo_valor ?? '').split(',').some((x) => ctx.canais.includes(x.trim()));
-    case 'escritorio':
-      return (c.escopo_valor ?? '').split(',').some((x) => ctx.escritorios.includes(x.trim()));
-    default:
-      return false;
-  }
+  return c.escopo !== 'produto' && escopoServe(c.escopo, c.escopo_valor, ctx);
 }
-
-/** O produto casa com este item da condicao? */
-export function itemCasa(it: ItemCondicao, produto: string, cls?: Classificacao | null): boolean {
-  const alvo = norm(it.alvo_tipo, it.alvo_valor);
-  if (!alvo) return false;
-  switch (it.alvo_tipo) {
-    case 'produto':
-      return norm('produto', produto) === alvo;
-    case 'marca':
-      return norm('marca', cls?.marca) === alvo;
-    case 'linha':
-      return norm('linha', cls?.linha_id) === alvo;
-    case 'grupo':
-      return norm('grupo', cls?.grupo_id) === alvo;
-    case 'categoria':
-      return norm('categoria', cls?.categoria_id) === alvo;
-    default:
-      return false;
-  }
-}
-
-const EPS = 1e-9;
 
 /** Avalia todos os combos para o carrinho (sem os itens de brinde, que sao ignorados). */
 export function avaliarCombos(
@@ -135,54 +108,31 @@ export function avaliarCombos(
   for (const combo of combos) {
     if (!comboServe(combo, ctx) || !combo.itens.length) continue;
 
-    // itens por produto pegam primeiro; os demais mantem a ordem do cadastro
-    const ordem = [...combo.itens].sort((a, b) => Number(b.alvo_tipo === 'produto') - Number(a.alvo_tipo === 'produto'));
-    const restante = linhas.map((l) => l.qtd);
-    const usados = new Set<string>();
-    const razoes: number[] = [];
-    const faltas: FaltaCombo['faltas'] = [];
-    let algumProgresso = false;
-
-    for (const it of ordem) {
-      const min = Number(it.qtd_minima);
-      let total = 0;
-      linhas.forEach((l, n) => {
-        if (restante[n] > 0 && itemCasa(it, l.produto, classificacaoPorProduto[l.produto])) {
-          total += restante[n];
-          restante[n] = 0;
-          usados.add(l.produto);
-        }
-      });
-      if (total > 0) algumProgresso = true;
-      razoes.push(min > 0 ? Math.floor(total / min + EPS) : 0);
-      if (total + EPS < min) faltas.push({ item: it, falta: Math.round((min - total) * 1000) / 1000 });
-    }
-
-    const completo = razoes.every((r) => r >= 1);
-    if (!completo) {
-      if (algumProgresso) incompletos.push({ combo, faltas });
+    const r = avaliarCondicao(combo.itens, linhas, classificacaoPorProduto);
+    if (!r.completo) {
+      if (r.algumProgresso) incompletos.push({ combo, faltas: r.faltas });
       continue;
     }
-    const limite = combo.max_repeticoes && combo.max_repeticoes > 0 ? combo.max_repeticoes : Infinity;
-    const vezes = combo.repete ? Math.min(Math.min(...razoes), limite) : 1;
-    aplicados.push({ combo, vezes, produtos: [...usados] });
+    const vezes = vezesDoCombo(combo, r.razoes);
+    const faixa = combo.repete ? null : faixaAtingida(combo.faixas, r.total);
+    aplicados.push({ combo, vezes, produtos: [...r.usados], total: r.total, faixa });
   }
+
+  // entre combos completos com a MESMA condicao vale so o de escopo mais especifico (igual ao incentivo)
+  const vencedores = semSubstituidos(aplicados, (a) => a.combo);
+  aplicados.splice(0, aplicados.length, ...vencedores);
 
   const brindesPorProduto = new Map<string, BrindeCombo>();
   const descontoPorProduto: ResultadoCombos['descontoPorProduto'] = {};
   for (const a of aplicados) {
     const c = a.combo;
-    if (c.beneficio === 'produto_gratis' && c.brinde_cod_produto && (c.brinde_qtd ?? 0) > 0) {
-      const q = Number(c.brinde_qtd) * a.vezes;
+    const { brindeQtd, descontoPct } = beneficioDaFaixa(c, a.faixa);
+    if (c.beneficio === 'produto_gratis' && c.brinde_cod_produto && brindeQtd > 0) {
+      const q = brindeQtd * a.vezes;
       const atual = brindesPorProduto.get(c.brinde_cod_produto);
       brindesPorProduto.set(c.brinde_cod_produto, atual ? { ...atual, quantidade: atual.quantidade + q } : { produto: c.brinde_cod_produto, quantidade: q, comboId: c.id, comboNome: c.nome });
-    } else if (c.beneficio === 'desconto_pct' && (c.desconto_pct ?? 0) > 0) {
-      for (const p of a.produtos) {
-        const atual = descontoPorProduto[p];
-        const pct = Number(c.desconto_pct);
-        const extra = Number(c.desconto_extra_max_pct) || 0;
-        if (!atual || pct > atual.pct || (pct === atual.pct && extra > atual.extra)) descontoPorProduto[p] = { pct, extra };
-      }
+    } else if (c.beneficio === 'desconto_pct' && descontoPct > 0) {
+      registrarDescontoCombo(descontoPorProduto, a.produtos, descontoPct, c.desconto_extra_max_pct);
     }
   }
 

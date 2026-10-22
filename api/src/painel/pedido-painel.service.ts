@@ -134,7 +134,7 @@ export class PedidoPainelService {
       tipo_bonificacao: corpo.tipo === 'bonificacao' ? corpo.tipo_bonificacao ?? null : null,
       centro_custo: corpo.tipo === 'bonificacao' ? corpo.centro_custo ?? null : null,
       justificativa: corpo.tipo === 'bonificacao' ? corpo.justificativa ?? null : null,
-      itens: itensIn.map((i: Linha) => ({
+      itens: itensIn.map((i: Linha) => (i?.brinde === true ? { produto: String(i?.produto ?? '').trim(), unidade: String(i?.unidade ?? '').trim() || unidades.get(String(i?.produto ?? '').trim()) || UNIDADE_PEDIDO_PADRAO, quantidade: i?.quantidade, preco: null, brinde: true, combo_id: i?.combo_id ?? null } : {
         produto: String(i?.produto ?? '').trim(),
         unidade: String(i?.unidade ?? '').trim() || unidades.get(String(i?.produto ?? '').trim()) || UNIDADE_PEDIDO_PADRAO,
         quantidade: i?.quantidade,

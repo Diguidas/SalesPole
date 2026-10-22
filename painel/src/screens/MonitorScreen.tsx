@@ -102,7 +102,7 @@ export function MonitorScreen() {
         <>
           <div className="chips"><button className="chip" onClick={carregar}>Atualizar agora</button></div>
           {erro && <p className="erro-msg">{erro}</p>}
-          {aviso && <p style={{ color: '#166534', fontSize: 13 }}>{aviso}</p>}
+          {aviso && <p style={{ color: 'var(--c-ok-texto)', fontSize: 13 }}>{aviso}</p>}
           {!m && !erro && <div className="vazio">Carregando…</div>}
         </>
       )}
@@ -195,7 +195,7 @@ function Cartao({ titulo, valor, bom, ruim, neutro, para }: { titulo: string; va
   const corpo = (
     <>
       <div className="suave">{titulo}</div>
-      <div className="numero" style={{ color: valor === 0 ? '#16a34a' : neutro ? '#c2410c' : '#dc2626' }}>{valor === 0 ? '✓' : valor}</div>
+      <div className="numero" style={{ color: valor === 0 ? 'var(--c-ok)' : neutro ? 'var(--c-prim-texto)' : 'var(--c-erro)' }}>{valor === 0 ? '✓' : valor}</div>
       <div className="suave">{valor === 0 ? bom : ruim}</div>
     </>
   );

@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import { Navigate, useParams } from 'react-router-dom';
 import { api } from '../api';
 import { ehHierarquia, tem, useAuth } from '../auth';
+import { FONTE_DO_ESCOPO, useOpcoesEscopo } from '../opcoes';
 import { CADASTROS, traco, type Campo, type DefCadastro } from './cadastros';
+import { FichasEscolha, SeletorMultiplo, nomesDe } from './SeletorMultiplo';
 
 type Linha = Record<string, unknown> & { ativo?: boolean };
 type Valores = Record<string, string | boolean>;
@@ -113,7 +115,7 @@ export function Cadastro({ def: defBase }: { def: DefCadastro }) {
           <div className="titulo" style={{ marginBottom: 12 }}>{editando === 'novo' ? def.rotuloNovo : 'Editar'}</div>
           <div className="form-grade">
             {def.campos.filter((c) => !c.quando || c.quando(valores)).map((c) => (
-              <CampoForm key={c.chave} campo={c} valor={valores[c.chave]} bloqueado={editando !== 'novo' && !!c.fixoAoEditar} aoMudar={(v) => setValores((a) => ({ ...a, [c.chave]: v }))} />
+              <CampoForm key={c.chave} campo={c} valor={valores[c.chave]} bloqueado={editando !== 'novo' && !!c.fixoAoEditar} escopo={String(valores.escopo ?? '')} aoMudar={(v) => setValores((a) => ({ ...a, [c.chave]: v }))} />
             ))}
           </div>
           {erro && <p className="erro-msg">{erro}</p>}
@@ -155,8 +157,10 @@ export function Cadastro({ def: defBase }: { def: DefCadastro }) {
   );
 }
 
-function CampoForm({ campo, valor, bloqueado, aoMudar }: { campo: Campo; valor: string | boolean; bloqueado: boolean; aoMudar: (v: string | boolean) => void }) {
+function CampoForm({ campo, valor, bloqueado, escopo, aoMudar }: { campo: Campo; valor: string | boolean; bloqueado: boolean; escopo: string; aoMudar: (v: string | boolean) => void }) {
   const [sugestoes, setSugestoes] = useState<Array<{ cod_produto: string; descricao: string }>>([]);
+  const opcoes = useOpcoesEscopo();
+  const [aberto, setAberto] = useState(false);
   const id = `campo-${campo.chave}`;
 
   // busca de produto: codigo ou parte do nome
@@ -185,6 +189,43 @@ function CampoForm({ campo, valor, bloqueado, aoMudar }: { campo: Campo; valor: 
       </label>
     );
   }
+  // a quem vale: escritorio, canal, equipe, tipo de estabelecimento e lista de preco por opcoes; cliente e vendedor digitados
+  const fonteEscopo = campo.tipo === 'escopo_valor' ? FONTE_DO_ESCOPO[escopo] : undefined;
+  if (fonteEscopo) {
+    const lista = opcoes?.[fonteEscopo];
+    return (
+      <div className="campo">
+        <span>{campo.rotulo}{campo.obrigatorio ? ' *' : ''}</span>
+        <button type="button" className="campo-escolha" disabled={bloqueado} onClick={() => setAberto(true)}>
+          <FichasEscolha valor={String(valor)} vazio="Clique para escolher" nomes={nomesDe(lista)} />
+        </button>
+        <input tabIndex={-1} aria-hidden style={{ opacity: 0, height: 0, padding: 0, border: 0 }} required={campo.obrigatorio} value={String(valor)} onChange={() => undefined} />
+        {aberto && (
+          <SeletorMultiplo
+            titulo={campo.rotulo} tipo="opcoes" valor={String(valor)} opcoes={opcoes ? lista ?? [] : null}
+            aoFechar={() => setAberto(false)} aoConfirmar={(csv) => { aoMudar(csv); setAberto(false); }}
+          />
+        )}
+      </div>
+    );
+  }
+
+  // linha, grupo, categoria e marca: uma opcao da lista (ou nenhuma = qualquer)
+  if (campo.tipo === 'classificacao') {
+    const lista = opcoes?.[campo.fonte ?? ''] ?? [];
+    const atual = String(valor);
+    return (
+      <label className="campo" htmlFor={id}>
+        <span>{campo.rotulo}</span>
+        <select id={id} value={atual} disabled={bloqueado} onChange={(e) => aoMudar(e.target.value)}>
+          <option value="">Qualquer</option>
+          {atual && !lista.some((o) => o.codigo === atual) && <option value={atual}>{atual}</option>}
+          {lista.map((o) => <option key={o.codigo} value={o.codigo}>{o.descricao && o.descricao !== o.codigo ? `${o.descricao} (${o.codigo})` : o.codigo}</option>)}
+        </select>
+      </label>
+    );
+  }
+
   return (
     <label className="campo" htmlFor={id}>
       <span>{campo.rotulo}{campo.obrigatorio ? ' *' : ''}</span>
@@ -202,7 +243,7 @@ function CampoForm({ campo, valor, bloqueado, aoMudar }: { campo: Campo; valor: 
           required={campo.obrigatorio}
           placeholder={campo.dica}
           onChange={(e) => aoMudar(e.target.value)}
-          style={{ font: 'inherit', padding: 9, border: '1px solid #e2e8f0', borderRadius: 8, resize: 'vertical' }}
+          style={{ font: 'inherit', padding: 9, border: '1px solid var(--c-borda)', borderRadius: 8, resize: 'vertical' }}
         />
       ) : (
         <input

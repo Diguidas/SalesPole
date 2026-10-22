@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
 import { ehHierarquia, useAuth } from '../auth';
@@ -12,6 +12,13 @@ interface Vendas {
   por_escritorio: Grupo[];
   por_canal: Grupo[];
   por_vendedor: Vendedor[];
+}
+interface ItemRanking { chave: string; rotulo: string; valor: number }
+interface Rankings { atualizando: boolean; dims: Record<string, ItemRanking[]> }
+interface VisitaVendedor { cod_vendedor: string; nome: string | null; visitas: number; concluidas: number; vendeu: number; fora_do_raio: number; pendentes: number; recusadas: number }
+interface ResumoVisitas {
+  total: { visitas: number; concluidas: number; vendeu: number; fora_do_raio: number; pendentes: number; recusadas: number; vendedores: number };
+  por_vendedor: VisitaVendedor[];
 }
 interface Atencao { resumo: { pedidos_com_problema: number; sincs_com_problema: number; bonificacoes_aguardando: number; visitas_pendentes: number } }
 
@@ -48,16 +55,17 @@ export function InicioScreen() {
   const [periodo, setPeriodo] = useState('3');
   const [d, setD] = useState<Vendas | null>(null);
   const [erro, setErro] = useState<string | null>(null);
+  const [rk, setRk] = useState<Rankings | null>(null);
+  const [erroRk, setErroRk] = useState<string | null>(null);
+  const [vis, setVis] = useState<ResumoVisitas | null>(null);
+  const [erroVis, setErroVis] = useState<string | null>(null);
   const [atencao, setAtencao] = useState<Atencao['resumo'] | null>(null);
-  const [verTodos, setVerTodos] = useState(false);
-  const [busca, setBusca] = useState('');
 
   const carregar = useCallback(async () => {
     setErro(null);
     setD(null);
     try {
-      const { ini, fim } = intervalo(periodo);
-      setD(await api<Vendas>(`/painel/indicadores?ini=${ini}&fim=${fim}`));
+          setD(await api<Vendas>(`/painel/indicadores?ini=${ini}&fim=${fim}`));
     } catch (e) {
       setErro((e as Error).message);
     }
@@ -67,6 +75,39 @@ export function InicioScreen() {
     void carregar();
   }, [carregar]);
 
+  // visitas do periodo (tabela pequena: consulta direta)
+  useEffect(() => {
+    let vivo = true;
+    setVis(null);
+    setErroVis(null);
+    const { ini, fim } = intervalo(periodo);
+    api<ResumoVisitas>(`/painel/indicadores/visitas?ini=${ini}&fim=${fim}`)
+      .then((r) => vivo && setVis(r))
+      .catch((e) => vivo && setErroVis((e as Error).message));
+    return () => { vivo = false; };
+  }, [periodo]);
+
+  // rankings (todos os cards numa chamada so, do resumo mensal); se o resumo ainda esta sendo montado, tenta de novo
+  useEffect(() => {
+    let vivo = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let tentativas = 0;
+    setRk(null);
+    setErroRk(null);
+    const { ini, fim } = intervalo(periodo);
+    const buscar = () => {
+      api<Rankings>(`/painel/indicadores/rankings?ini=${ini}&fim=${fim}&limite=10`)
+        .then((r) => {
+          if (!vivo) return;
+          setRk(r);
+          if (r.atualizando && ++tentativas < 60) timer = setTimeout(buscar, 4000);
+        })
+        .catch((e) => vivo && setErroRk((e as Error).message));
+    };
+    buscar();
+    return () => { vivo = false; if (timer) clearTimeout(timer); };
+  }, [periodo]);
+
   // faixa "precisa de atencao": falha nela nao atrapalha o resto da pagina
   useEffect(() => {
     if (ehHierarquia(usuario?.papel)) return; // o monitor e do sistema: nao e liberado para a hierarquia
@@ -74,11 +115,7 @@ export function InicioScreen() {
   }, []);
 
   const t = d?.total;
-  const vendedores = useMemo(() => {
-    const q = busca.trim().toLowerCase();
-    const todos = (d?.por_vendedor ?? []).filter((v) => !q || v.rotulo.toLowerCase().includes(q) || v.chave.includes(q));
-    return verTodos || q ? todos : todos.slice(0, 10);
-  }, [d, busca, verTodos]);
+  const { ini, fim } = intervalo(periodo);
 
   const pendencias = atencao
     ? [
@@ -135,41 +172,21 @@ export function InicioScreen() {
                 </div>
                 <div className="card">
                   <h3>Por canal</h3>
-                  <Barras itens={d.por_canal} rotulo={(g) => (g.chave ? `${g.chave} · ${g.rotulo}` : 'Sem canal')} total={t.valor} limite={6} />
+                  <Barras itens={d.por_canal} rotulo={(g) => (g.chave ? `${g.chave} · ${g.rotulo}` : 'Sem canal')} total={t.valor} limite={10} />
                 </div>
                 <div className="card">
                   <h3>Por escritório de vendas</h3>
-                  <Barras itens={d.por_escritorio} rotulo={(g) => (g.chave ? `${g.chave} · ${g.rotulo}` : 'Sem escritório')} total={t.valor} limite={6} />
+                  <Barras itens={d.por_escritorio} rotulo={(g) => (g.chave ? `${g.chave} · ${g.rotulo}` : 'Sem escritório')} total={t.valor} limite={10} />
                 </div>
-                <div className="card">
-                  <h3>Maiores vendedores</h3>
-                  <Barras itens={d.por_vendedor.slice(0, 6)} rotulo={(g) => g.rotulo} total={t.valor} />
-                </div>
-              </div>
-
-              <div className="card">
-                <div className="linha" style={{ alignItems: 'center', marginBottom: 8 }}>
-                  <h3 style={{ margin: 0 }}>Todos os vendedores</h3>
-                  <input className="entrada" style={{ minWidth: 220 }} placeholder="Buscar vendedor" value={busca} onChange={(e) => setBusca(e.target.value)} />
-                </div>
-                <table style={{ border: 'none' }}>
-                  <thead><tr><th>Vendedor</th><th style={{ textAlign: 'right' }}>Vendas</th><th style={{ textAlign: 'right' }}>% do total</th><th style={{ textAlign: 'right' }}>Pedidos</th><th style={{ textAlign: 'right' }}>Positivação</th></tr></thead>
-                  <tbody>
-                    {vendedores.map((v) => (
-                      <tr key={v.chave}>
-                        <td>{v.rotulo}</td>
-                        <td style={{ textAlign: 'right' }}>{moeda(v.valor)}</td>
-                        <td style={{ textAlign: 'right' }}>{t.valor ? `${((v.valor / t.valor) * 100).toFixed(1)}%` : '—'}</td>
-                        <td style={{ textAlign: 'right' }}>{inteiro(v.pedidos)}</td>
-                        <td style={{ textAlign: 'right' }}>{v.positivacao_pct == null ? '—' : `${v.positivacao_pct.toFixed(0)}% (${inteiro(v.clientes)}/${inteiro(v.carteira)})`}</td>
-                      </tr>
-                    ))}
-                    {vendedores.length === 0 && <tr><td colSpan={5} className="suave">Nenhum vendedor encontrado.</td></tr>}
-                  </tbody>
-                </table>
-                {!busca && d.por_vendedor.length > 10 && (
-                  <button className="btn" style={{ marginTop: 10 }} onClick={() => setVerTodos((v) => !v)}>{verTodos ? 'Mostrar só os 10 maiores' : `Ver todos (${d.por_vendedor.length})`}</button>
-                )}
+                <CartaoRanking titulo="Por grupo de cliente" dim="rede" rk={rk} erro={erroRk} total={t.valor} />
+                <CartaoRanking titulo="Maiores vendedores" dim="vendedor" rk={rk} erro={erroRk} total={t.valor} />
+                <CartaoRanking titulo="Produtos mais vendidos" dim="produto" rk={rk} erro={erroRk} total={t.valor} />
+                <CartaoRanking titulo="Maiores clientes" dim="cliente" rk={rk} erro={erroRk} total={t.valor} />
+                <CartaoRanking titulo="Por grupo de produto" dim="grupo" rk={rk} erro={erroRk} total={t.valor} />
+                <CartaoRanking titulo="Por linha" dim="linha" rk={rk} erro={erroRk} total={t.valor} />
+                <CartaoRanking titulo="Por categoria" dim="categoria" rk={rk} erro={erroRk} total={t.valor} />
+                <CartaoRanking titulo="Por marca" dim="marca" rk={rk} erro={erroRk} total={t.valor} />
+                <CartaoVisitas vis={vis} erro={erroVis} />
               </div>
             </>
           )}
@@ -201,6 +218,53 @@ function Colunas({ itens }: { itens: Grupo[] }) {
           <div className="coluna-rotulo">{nomeMes(g.chave)}</div>
         </div>
       ))}
+    </div>
+  );
+}
+
+/** Top 10 de uma dimensao (dados vem de uma chamada so, feita pela pagina para o periodo escolhido). */
+function CartaoRanking({ titulo, dim, rk, erro, total }: { titulo: string; dim: string; rk: Rankings | null; erro: string | null; total: number }) {
+  const nome = (g: ItemRanking) => {
+    if (dim === 'vendedor') return g.rotulo;
+    if (!g.chave && !g.rotulo) return 'Sem classificação';
+    if (!g.rotulo || g.rotulo === g.chave) return g.chave;
+    return dim === 'marca' ? g.rotulo : `${g.chave} · ${g.rotulo}`;
+  };
+  return (
+    <div className="card">
+      <h3>{titulo}</h3>
+      {erro ? <p className="erro-msg">{erro}</p>
+        : !rk ? <div className="suave">Carregando…</div>
+        : rk.atualizando ? <div className="suave">Preparando os dados deste período (só na primeira vez, leva alguns instantes)…</div>
+        : <Barras itens={(rk.dims[dim] ?? []).map((g) => ({ ...g, pedidos: 0, clientes: 0 }))} rotulo={nome} total={total} />}
+    </div>
+  );
+}
+
+/** Visitas do periodo: totais e os vendedores que mais visitaram, com o % de visitas que viraram venda. */
+function CartaoVisitas({ vis, erro }: { vis: ResumoVisitas | null; erro: string | null }) {
+  const t = vis?.total;
+  const lista = (vis?.por_vendedor ?? []).slice(0, 10);
+  const max = Math.max(...lista.map((v) => v.visitas), 1);
+  return (
+    <div className="card">
+      <h3>Visitas</h3>
+      {erro ? <p className="erro-msg">{erro}</p> : !vis || !t ? <div className="suave">Carregando…</div> : t.visitas === 0 ? <div className="suave">Nenhuma visita no período.</div> : (
+        <>
+          <p className="suave" style={{ margin: '0 0 8px' }}>
+            <strong>{inteiro(t.visitas)}</strong> visitas · {inteiro(t.concluidas)} concluídas · <strong>{t.concluidas ? ((t.vendeu / t.concluidas) * 100).toFixed(0) : 0}%</strong> com venda
+            {t.fora_do_raio > 0 ? ` · ${inteiro(t.fora_do_raio)} fora do raio` : ''}{t.pendentes > 0 ? ` · ${inteiro(t.pendentes)} a validar` : ''}
+          </p>
+          {lista.map((v) => (
+            <div className="barra-linha" key={v.cod_vendedor}>
+              <div className="barra-rotulo" title={v.nome ?? v.cod_vendedor}>{v.nome ?? v.cod_vendedor}</div>
+              <div className="barra-trilho"><div className="barra" style={{ width: `${Math.max((v.visitas / max) * 100, 1)}%` }} /></div>
+              <div className="barra-valor">{inteiro(v.visitas)}<small> · {v.concluidas ? ((v.vendeu / v.concluidas) * 100).toFixed(0) : 0}% venda</small></div>
+            </div>
+          ))}
+          {t.pendentes > 0 && <p style={{ margin: '8px 0 0' }}><Link to="/visitas">Validar visitas pendentes →</Link></p>}
+        </>
+      )}
     </div>
   );
 }

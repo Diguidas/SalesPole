@@ -108,7 +108,7 @@ export function SupervisoresSapPanel() {
         <button className="chip" onClick={carregar}>Atualizar</button>
       </div>
       <p className="suave" style={{ margin: '0 0 10px' }}>Quem vem da tabela de supervisores do SAP (ZSDT087). Escolha um nome e crie o login dele; a equipe é descoberta pelo código SAP. Quem já tem acesso mostra um seletor de papel (para promover a gerente geral ou administrador). As permissões de cada um ficam na aba “Painel” → Editar.</p>
-      {aviso && <p style={{ color: '#166534', fontSize: 13 }}>{aviso}</p>}
+      {aviso && <p style={{ color: 'var(--c-ok-texto)', fontSize: 13 }}>{aviso}</p>}
       {erro && !alvo && <p className="erro-msg">{erro}</p>}
 
       {alvo && (

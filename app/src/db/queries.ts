@@ -334,11 +334,14 @@ export interface ItemSap {
   unidade_venda: string | null;
   valor_unitario: number | null;
   recusa: string | null;
+  situacao: string | null;
+  qtd_faturada: number | null;
+  valor_faturado: number | null;
 }
 
 export function itensDoPedidoSap(db: SQLiteDatabase, ordem: string) {
   return db.getAllAsync<ItemSap>(
-    `SELECT item, cod_produto, denominacao, quantidade, unidade_venda, valor_unitario, recusa
+    `SELECT item, cod_produto, denominacao, quantidade, unidade_venda, valor_unitario, recusa, situacao, qtd_faturada, valor_faturado
        FROM pedido_itens_sap WHERE ordem = ? ORDER BY item`,
     ordem,
   );

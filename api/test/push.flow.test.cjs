@@ -41,6 +41,7 @@ class Q {
   lt(c, v) { this.f.push([c, '<', v]); return this; }
   is(c, v) { this.f.push([c, v === null ? 'is' : '=', v]); return this; }
   in(c, arr) { this.f.push([c, 'in', arr]); return this; }
+  filter(c, o, v) { this.f.push([c, o, v]); return this; }
   limit(n) { this.lim = n; return this; }
   order(c, o) { this.ord = [c, o && o.ascending === false ? 'desc' : 'asc']; return this; }
   maybeSingle() { this.single = true; return this.run(); }
@@ -56,6 +57,7 @@ class Q {
       if (o === 'in') { params.push(v); return `${c} = any($${params.length})`; }
       if (o === 'is') return `${c} is null`;
       if (o === 'notnull') return `${c} is not null`;
+      if (o === 'cs') { params.push(v); return `${c} @> $${params.length}::jsonb`; }
       params.push(val(v));
       return `${c} ${o} $${params.length}`;
     }).join(' and ');
@@ -817,7 +819,7 @@ const t = async (nome, fn) => {
     const r = await sync.sincronizarOrdem('100409', '5800001');
     assert.equal(sapGetUrls.length, 2);
     assert.ok(sapGetUrls[0].includes('/salespole_pedidos') && sapGetUrls[0].includes('ordens=5800001') && sapGetUrls[0].includes('codvendedor=100409'), sapGetUrls[0]);
-    assert.ok(sapGetUrls[1].includes('/salespole_itens') && sapGetUrls[1].includes('ordens=5800001'), sapGetUrls[1]);
+    assert.ok(sapGetUrls[1].includes('/salespole_itens') && sapGetUrls[1].includes('ordens=5800001') && sapGetUrls[1].includes('atualizar=X'), sapGetUrls[1]); // ordem avulsa: o SAP atualiza o ciclo antes
     assert.equal(r.pedido.ordem, '5800001');
     assert.equal(r.pedido.status, 'A Faturar');
     assert.equal(r.itens.length, 1);
@@ -838,6 +840,36 @@ const t = async (nome, fn) => {
     assert.equal((await db.query(`select count(*)::int as n from pedidos_sap where ordem = '5899999'`)).rows[0].n, 0);
   });
 
+  await t('49b. itens na sincronizacao: so os status marcados no parametro pedem atualizacao ao SAP (atualizar=X); ordem sem itens e lida sem isso', async () => {
+    await db.exec(`
+      insert into pedidos_sap(ordem, cod_cliente, dt_criacao, valor, status) values
+        ('S1', '1048754', current_date - 5, 10, 'A Faturar'), ('S2', '1048754', current_date - 5, 10, 'Faturado'),
+        ('S3', '1048754', current_date - 5, 10, 'Faturado'),  ('S4', '1048754', current_date - 5, 10, ' a faturar ');
+      insert into pedido_itens_sap(ordem, item, cod_produto, quantidade, unidade_venda) values ('S1', '10', 'PA', 1, 'KI'), ('S2', '10', 'PA', 1, 'KI');
+      update parametros set valor = '["A Faturar"]' where chave = 'status_atualizar_sync';`);
+    const f = (await db.query(`select ordem, atualizar from fn_ordens_para_itens('R1', 90, array['A Faturar']) where ordem like 'S%' order by ordem`)).rows;
+    assert.deepEqual(f.map((x) => [x.ordem, x.atualizar]), [['S1', true], ['S3', false], ['S4', true]]); // S2: faturada e ja tem itens = fica de fora; caixa/espaco nao importam
+    sapGetUrls = [];
+    sapGets = [...Array.from({ length: 6 }, () => ({ status: 200, body: { pedidos: [] } })), ...Array.from({ length: 20 }, () => ({ status: 200, body: { ordens: [] } }))];
+    await sync.sincronizarPedidos('100409', 'R1');
+    const itens = sapGetUrls.filter((u) => u.includes('/salespole_itens'));
+    const comAtualizar = itens.filter((u) => u.includes('atualizar=X')).join(' ');
+    const semAtualizar = itens.filter((u) => !u.includes('atualizar=X')).join(' ');
+    assert.ok(comAtualizar.includes('S1') && comAtualizar.includes('S4') && !comAtualizar.includes('S3') && !comAtualizar.includes('S2'), comAtualizar);
+    assert.ok(semAtualizar.includes('S3') && !semAtualizar.includes('S1') && !semAtualizar.includes('S4') && !semAtualizar.includes('S2'), semAtualizar);
+    await db.exec(`update parametros set valor = '[]' where chave = 'status_atualizar_sync'`);
+    sapGetUrls = [];
+    sapGets = [...Array.from({ length: 6 }, () => ({ status: 200, body: { pedidos: [] } })), ...Array.from({ length: 20 }, () => ({ status: 200, body: { ordens: [] } }))];
+    await sync.sincronizarPedidos('100409', 'R1');
+    // lista vazia = sem filtro de status: todos os pedidos dos ultimos 15 dias pedem atualizacao (S2 inclusive, faturado e com itens)
+    const vazia = sapGetUrls.filter((u) => u.includes('/salespole_itens') && u.includes('atualizar=X')).join(' ');
+    assert.ok(['S1', 'S2', 'S3', 'S4'].every((o) => vazia.includes(o)), vazia);
+    await db.exec("update pedidos_sap set dt_criacao = current_date - 40 where ordem in ('S1', 'S2')"); // fora dos 15 dias: S2 (com itens) sai; S1 tambem
+    const antigas = (await db.query("select ordem, atualizar from fn_ordens_para_itens('R1', 90, array[]::text[]) where ordem like 'S%' order by ordem")).rows;
+    assert.deepEqual(antigas.map((x) => [x.ordem, x.atualizar]), [['S3', true], ['S4', true]]);
+    await db.exec(`delete from pedido_itens_sap where ordem like 'S%'; delete from pedidos_sap where ordem like 'S%'`);
+  });
+
   // ---- painel: bonificacao e pedidos de clientes V ----
   const painel = new PainelService(fakeSb(db));
   const UP = { email: 'aprovador@pole.com', nome: 'Ana', papel: 'aprovador' };
@@ -848,7 +880,7 @@ const t = async (nome, fn) => {
       values ('${idBon}', '100409', '1048753', now(), '[{"produto":"PA","unidade":"CX","quantidade":"2"}]', 'h-bon-1', 'aguardando_aprovacao', 'bonificacao', '115', '2001501007', 'Cliente novo');
   `);
   await t('50. painel: lista bonificacao aguardando com nomes; aprovar marca quem decidiu, grava evento e nao decide duas vezes', async () => {
-    const l = await painel.bonificacoes();
+    const l = await painel.bonificacoes(null);
     const b = l.find((x) => x.id === idBon);
     assert.equal(b.tipo_descricao, 'Bonificacao comercial');
     assert.equal(b.justificativa, 'Cliente novo');
@@ -859,7 +891,7 @@ const t = async (nome, fn) => {
     assert.deepEqual([row.status, row.decidido_por, row.em], ['aprovado', 'aprovador@pole.com', true]);
     assert.equal((await db.query(`select count(*)::int as n from pedido_eventos where pedido_id = '${idBon}' and tipo = 'bonificacao_aprovada'`)).rows[0].n, 1);
     await assert.rejects(painel.decidirBonificacao(UP, idBon, true), (e) => e.getStatus() === 409);
-    assert.ok(!(await painel.bonificacoes()).some((x) => x.id === idBon));
+    assert.ok(!(await painel.bonificacoes(null)).some((x) => x.id === idBon));
   });
 
   await t('51. painel: rejeitar exige motivo e o motivo fica para o vendedor ver', async () => {
@@ -870,8 +902,8 @@ const t = async (nome, fn) => {
     await painel.decidirBonificacao(UP, id2, false, 'Sem verba no centro de custo');
     const row = (await db.query(`select status, motivo_rejeicao from pedidos_app where id = '${id2}'`)).rows[0];
     assert.deepEqual([row.status, row.motivo_rejeicao], ['rejeitado', 'Sem verba no centro de custo']);
-    assert.equal((await painel.bonificacoes('rejeitado')).some((x) => x.id === id2), true);
-    await assert.rejects(painel.bonificacoes('qualquer'), (e) => e.getStatus() === 422);
+    assert.equal((await painel.bonificacoes(null, 'rejeitado')).some((x) => x.id === id2), true);
+    await assert.rejects(painel.bonificacoes(null, 'qualquer'), (e) => e.getStatus() === 422);
   });
 
   // ---- cadastros do painel ----
@@ -963,7 +995,7 @@ const t = async (nome, fn) => {
       ('00000000-0000-4000-8000-0000000008a3', '${vp(3)}', 'fachada', '100409/f3.jpg', now(), null, null);
   `);
   await t('57. painel visitas: lista pendentes recentes com alertas e link assinado so da foto que existe', async () => {
-    const l = await painel.visitas({});
+    const l = await painel.visitas(null, {});
     assert.deepEqual(l.map((x) => x.id).sort(), [vp(1), vp(2), vp(3)].sort()); // a de 30 dias fica fora do padrao (7 dias)
     const v1 = l.find((x) => x.id === vp(1));
     const v2 = l.find((x) => x.id === vp(2));
@@ -973,10 +1005,10 @@ const t = async (nome, fn) => {
     assert.deepEqual([v2.fotos[0].removida, v2.fotos[0].url], [true, null]); // foto apagada pela retencao: sem link
     assert.deepEqual([l.find((x) => x.id === vp(3)).fotos[0].enviada, l.find((x) => x.id === vp(3)).fotos[0].url], [false, null]); // ainda nao subiu
     assert.ok(v1.cliente && v1.cliente.length > 0);
-    assert.equal((await painel.visitas({ ini: '2020-01-01' })).some((x) => x.id === vp(4)), true); // periodo maior traz a antiga
-    await rej(painel.visitas({ validacao: 'x' }), 422);
-    await rej(painel.visitas({ ini: '01/10/2026' }), 422);
-    assert.deepEqual((await painel.visitas({ vendedor: '0000100486' })), []);
+    assert.equal((await painel.visitas(null, { ini: '2020-01-01' })).some((x) => x.id === vp(4)), true); // periodo maior traz a antiga
+    await rej(painel.visitas(null, { validacao: 'x' }), 422);
+    await rej(painel.visitas(null, { ini: '01/10/2026' }), 422);
+    assert.deepEqual((await painel.visitas(null, { vendedor: '0000100486' })), []);
   });
 
   await t('58. painel visitas: validar/recusar so visita concluida e pendente; recusar exige motivo; grava quem decidiu', async () => {
@@ -987,9 +1019,9 @@ const t = async (nome, fn) => {
     await rej(painel.validarVisita(UP, vp(1), false, 'mudei de ideia'), 409); // ja decidida
     await rej(painel.validarVisita(UP, vp(3), true), 409); // ainda em andamento
     await painel.validarVisita(UP, vp(2), false, 'GPS simulado e foto de outro lugar');
-    assert.deepEqual((await painel.visitas({ validacao: 'recusada' })).map((x) => [x.id, x.validacao_obs]), [[vp(2), 'GPS simulado e foto de outro lugar']]);
-    assert.ok(!(await painel.visitas({})).some((x) => x.id === vp(1) || x.id === vp(2))); // saem da fila de pendentes
-    assert.equal((await painel.visitas({ validacao: 'todas' })).length >= 3, true);
+    assert.deepEqual((await painel.visitas(null, { validacao: 'recusada' })).map((x) => [x.id, x.validacao_obs]), [[vp(2), 'GPS simulado e foto de outro lugar']]);
+    assert.ok(!(await painel.visitas(null, {})).some((x) => x.id === vp(1) || x.id === vp(2))); // saem da fila de pendentes
+    assert.equal((await painel.visitas(null, { validacao: 'todas' })).length >= 3, true);
   });
 
   // ---- gestao de usuarios ----
@@ -1124,7 +1156,7 @@ const t = async (nome, fn) => {
       { codvendedor: '', nome: 'sem codigo', documento: '', rota: '' },
     ] } }];
     const r = await ind.importar();
-    assert.deepEqual(r, { total: 2, novos: 1 });
+    assert.deepEqual(r, { total: 2, novos: 1, supervisores: 0 });
     assert.ok(sapGetUrls[0].includes('/salespole_vendedores'), sapGetUrls[0]);
     const l = await ind.vendedores();
     const ant = l.find((x) => x.cod_vendedor === '100777');
@@ -1469,7 +1501,7 @@ const t = async (nome, fn) => {
     const row = (await db.query(`select tipo, tipo_bonificacao, centro_custo, justificativa, criado_por_painel, status from pedidos_app where id = '${r.id}'`)).rows[0];
     assert.deepEqual([row.tipo, row.tipo_bonificacao, row.centro_custo, row.criado_por_painel, row.status], ['bonificacao', '115', '2001501007', 'aprovador@pole.com', 'aguardando_aprovacao']);
     // aparece na fila de aprovacao do painel
-    assert.ok((await painel.bonificacoes()).some((x) => x.id === r.id));
+    assert.ok((await painel.bonificacoes(null)).some((x) => x.id === r.id));
   });
 
   // ---- consulta geral: pedidos e clientes ----
@@ -1501,24 +1533,24 @@ const t = async (nome, fn) => {
   `);
 
   await t('80. pedidos (SAP): filtros por vendedor, status, busca (ordem, cliente, nome) e periodo; total vem do banco', async () => {
-    const todos = await con.listarPedidos({ ini: '2000-01-01', fim: '2100-01-01' });
+    const todos = await con.listarPedidos(null, { ini: '2000-01-01', fim: '2100-01-01' });
     assert.equal(todos.origem, 'sap');
     assert.ok(todos.total >= 5 && todos.itens.length <= 50);
-    const so96 = async (f) => (await con.listarPedidos({ ini: '2000-01-01', fim: '2100-01-01', busca: '9600', ...f })).itens.map((x) => x.ordem).sort();
+    const so96 = async (f) => (await con.listarPedidos(null, { ini: '2000-01-01', fim: '2100-01-01', busca: '9600', ...f })).itens.map((x) => x.ordem).sort();
     assert.deepEqual(await so96({}), ['5990001', '5990002', '5990003', '5990004', '5993001']);
     assert.deepEqual(await so96({ status: 'recusado' }), ['5990003']); // sem diferenciar maiuscula
     assert.deepEqual(await so96({ vendedor: '0000300001' }), ['5990001', '5990002', '5990003', '5993001']); // Joao (RA); zeros a esquerda saem
     assert.deepEqual(await so96({ vendedor: '300002' }), ['5990004']); // Maria (RB)
-    assert.deepEqual((await con.listarPedidos({ ini: '2000-01-01', fim: '2100-01-01', busca: '5990004' })).itens.map((x) => x.ordem), ['5990004']);
-    assert.deepEqual((await con.listarPedidos({ ini: '2000-01-01', fim: '2100-01-01', busca: 'casa gama' })).itens.map((x) => x.ordem), ['5990004']); // pelo nome do cliente
-    const p1 = (await con.listarPedidos({ ini: '2000-01-01', fim: '2100-01-01', busca: '5990001' })).itens[0];
+    assert.deepEqual((await con.listarPedidos(null, { ini: '2000-01-01', fim: '2100-01-01', busca: '5990004' })).itens.map((x) => x.ordem), ['5990004']);
+    assert.deepEqual((await con.listarPedidos(null, { ini: '2000-01-01', fim: '2100-01-01', busca: 'casa gama' })).itens.map((x) => x.ordem), ['5990004']); // pelo nome do cliente
+    const p1 = (await con.listarPedidos(null, { ini: '2000-01-01', fim: '2100-01-01', busca: '5990001' })).itens[0];
     assert.deepEqual([p1.cliente, p1.vendedor, p1.rota, p1.valor, p1.notas], ['Mercado Alfa', 'Joao', 'RA', 1000, 1]);
     // periodo: so os ultimos 30 dias (padrao) deixam de fora os de 200/400 dias
-    const rec = (await con.listarPedidos({ busca: '9600' })).itens.map((x) => x.ordem).sort();
+    const rec = (await con.listarPedidos(null, { busca: '9600' })).itens.map((x) => x.ordem).sort();
     assert.deepEqual(rec, ['5990001', '5990003', '5993001']);
-    assert.equal((await con.listarPedidos({ ini: '2000-01-01', fim: '2100-01-01', pagina: '999' })).itens.length, 0); // pagina alem do fim
-    await rej(con.listarPedidos({ ini: 'ontem' }), 422);
-    await rej(con.listarPedidos({ ini: '2026-02-01', fim: '2026-01-01' }), 422, /inicio/);
+    assert.equal((await con.listarPedidos(null, { ini: '2000-01-01', fim: '2100-01-01', pagina: '999' })).itens.length, 0); // pagina alem do fim
+    await rej(con.listarPedidos(null, { ini: 'ontem' }), 422);
+    await rej(con.listarPedidos(null, { ini: '2026-02-01', fim: '2026-01-01' }), 422, /inicio/);
   });
 
   await t('80b. pedidos: filtro de clientes V (antecipado) e so nao faturados; devolve se e V, se esta faturado e ha quantos dias', async () => {
@@ -1530,7 +1562,7 @@ const t = async (nome, fn) => {
         ('5994003', '9600003', ${dias(4)}, 100, 'Recusado', '[]'),
         ('5994004', '9600003', ${dias(6)}, 150, 'A Faturar', '[{"nota_fiscal":"78"}]');
     `);
-    const lista = async (f) => (await con.listarPedidos({ ini: '2000-01-01', fim: '2100-01-01', busca: '9600', ...f })).itens;
+    const lista = async (f) => (await con.listarPedidos(null, { ini: '2000-01-01', fim: '2100-01-01', busca: '9600', ...f })).itens;
     const v = await lista({ antecipado: '1' });
     assert.deepEqual(v.map((x) => x.ordem).sort(), ['5990004', '5994001', '5994002', '5994003', '5994004']); // so cliente V (9600003)
     assert.ok(v.every((x) => x.antecipado === true));
@@ -1551,13 +1583,13 @@ const t = async (nome, fn) => {
   });
 
   await t('81. pedidos (app/painel): lista os criados no app e no painel, com filtros', async () => {
-    const r = await con.listarPedidos({ origem: 'app', ini: '2000-01-01', fim: '2100-01-01' });
+    const r = await con.listarPedidos(null, { origem: 'app', ini: '2000-01-01', fim: '2100-01-01' });
     assert.equal(r.origem, 'app');
     assert.ok(r.itens.length > 0);
     const doPainel = r.itens.filter((x) => x.criado_por_painel === 'aprovador@pole.com');
     assert.ok(doPainel.length >= 2); // criados nos testes do Novo pedido
     assert.ok(doPainel[0].vendedor !== undefined && 'cliente' in doPainel[0]);
-    const so = await con.listarPedidos({ origem: 'app', ini: '2000-01-01', fim: '2100-01-01', status: 'aguardando_aprovacao' });
+    const so = await con.listarPedidos(null, { origem: 'app', ini: '2000-01-01', fim: '2100-01-01', status: 'aguardando_aprovacao' });
     assert.ok(so.itens.length >= 1 && so.itens.every((x) => x.status === 'aguardando_aprovacao'));
   });
 
@@ -1593,7 +1625,7 @@ const t = async (nome, fn) => {
       { status: 200, body: { pedidos: [{ ordem: '5993002', codigocli: '9600001', dt_criacao: new Date().toISOString().slice(0, 10), valor: '320', status: 'Liberado para faturamento', notas: [] }] } },
       { status: 200, body: { ordens: [{ ordem: '5993002', itens: [{ item: '10', material: 'PC', denominacao: 'Produto C', quantidade: '4', unidade_venda: 'KI', valor_unitario: '80' }] }] } },
     ];
-    const d = await con.atualizarPedido('5993002');
+    const d = await con.atualizarPedido(null, '5993002');
     assert.ok(sapGetUrls.every((u) => u.includes('codvendedor=300001'))); // pelo vendedor da carteira
     assert.deepEqual([d.status, d.valor, d.itens.map((i) => i.cod_produto)], ['Liberado para faturamento', 320, ['PC']]);
   });
@@ -1601,25 +1633,25 @@ const t = async (nome, fn) => {
   await t('84. clientes: filtros por vendedor, situacao (bloqueado, parado, titulo vencido, antecipado), canal e busca; compras e vencido por cliente', async () => {
     // cliente comum que nunca comprou (o 9600003 ja tem pedido recente do teste anterior)
     await db.exec(`insert into clientes(cod_cliente, nome_fantasia, areas) values ('9600004', 'Lanchonete Delta', '[]') on conflict (cod_cliente) do nothing; insert into rota_clientes(rota, cod_cliente, dia_semana, sequencia) values ('RA','9600004',5,3) on conflict do nothing;`);
-    const q = async (f) => (await con.listarClientes({ busca: '9600', ...f })).itens.map((x) => x.cod_cliente).sort();
+    const q = async (f) => (await con.listarClientes(null, { busca: '9600', ...f })).itens.map((x) => x.cod_cliente).sort();
     assert.deepEqual(await q({}), ['9600001', '9600003', '9600004']); // 9600002 esta bloqueado: so aparece no filtro proprio
     assert.deepEqual(await q({ vendedor: '300001' }), ['9600001', '9600004']);
     assert.deepEqual(await q({ vendedor: '0300002' }), ['9600003']);
     assert.deepEqual(await q({ situacao: 'bloqueados' }), ['9600002']);
     assert.deepEqual(await q({ vendedor: '300001', situacao: 'bloqueados' }), ['9600002']);
     assert.deepEqual(await q({ situacao: 'parados' }), ['9600004']); // sem compra ha 90 dias (ou nunca); bloqueado continua fora
-    assert.deepEqual((await con.listarClientes({ busca: 'padaria beta' })).itens, []); // buscar pelo nome nao traz bloqueado
+    assert.deepEqual((await con.listarClientes(null, { busca: 'padaria beta' })).itens, []); // buscar pelo nome nao traz bloqueado
     assert.deepEqual(await q({ situacao: 'vencidos' }), ['9600001']);
     assert.deepEqual(await q({ situacao: 'antecipado' }), ['9600003']);
     assert.deepEqual(await q({ canal: '20' }), ['9600003']);
     assert.deepEqual(await q({ escritorio: 'E1' }), ['9600001']);
-    assert.deepEqual((await con.listarClientes({ busca: 'alfa' })).itens.map((x) => x.cod_cliente), ['9600001']); // por nome
-    const a = (await con.listarClientes({ busca: '9600001' })).itens[0];
+    assert.deepEqual((await con.listarClientes(null, { busca: 'alfa' })).itens.map((x) => x.cod_cliente), ['9600001']); // por nome
+    const a = (await con.listarClientes(null, { busca: '9600001' })).itens[0];
     assert.deepEqual([a.nome, a.vendedor, a.cidade, a.uf, a.escritorio, a.canal, a.valor_12m, a.vencido], ['Mercado Alfa', 'Joao', 'Campina Grande', 'PB', 'Escritorio Norte', 'Varejo', 1320, 250]); // 1000 + 320 (5000 de 400 dias, o recusado e a ordem cancelada ficam fora)
     assert.equal(typeof a.ultima_compra, 'string');
-    assert.equal((await con.listarClientes({ busca: '9600' })).total, 3);
-    assert.equal((await con.listarClientes({ busca: '9600', situacao: 'bloqueados' })).total, 1);
-    await rej(con.listarClientes({ situacao: 'xyz' }), 422);
+    assert.equal((await con.listarClientes(null, { busca: '9600' })).total, 3);
+    assert.equal((await con.listarClientes(null, { busca: '9600', situacao: 'bloqueados' })).total, 1);
+    await rej(con.listarClientes(null, { situacao: 'xyz' }), 422);
     const f = await con.filtrosClientes();
     assert.ok(f.canais.some((x) => x.codigo === '20' && x.descricao === 'Atacado') && f.escritorios.some((x) => x.codigo === 'E2'));
   });
@@ -1631,7 +1663,8 @@ const t = async (nome, fn) => {
     assert.equal(c.compras_por_mes.length, 12);
     assert.equal(c.compras_por_mes.reduce((a, m) => a + m.valor, 0), 1320);
     assert.equal(c.total_12m, 1320);
-    assert.deepEqual(c.ultimos_pedidos.map((p) => p.ordem), ['5993002', '5990001']); // mais recente primeiro, sem recusado
+    assert.deepEqual(c.ultimos_pedidos.map((p) => p.ordem), ['5993002', '5993001', '5990003', '5990001']); // mais recente primeiro, inclusive o recusado (so os totais o ignoram)
+    assert.equal(c.ultimos_pedidos.find((p) => p.ordem === '5990003').status, 'Recusado');
     assert.deepEqual([c.titulos.vencido, c.titulos.em_aberto, c.titulos.lista.length], [250, 750, 2]); // compensado nao entra
     assert.equal(c.visitas.length, 1);
     assert.deepEqual([c.visitas[0].resultado, c.visitas[0].validacao], ['vendeu', 'validada']);
@@ -1702,6 +1735,41 @@ const t = async (nome, fn) => {
     assert.equal(r.status, 'invalido');
     assert.ok(r.erros.some((e) => /sem tipo\/centro/.test(e)));
     assert.equal(sapChamadas.length, antes);
+  });
+
+  await t('88. sugestoes do painel: hora de repor pelo ritmo real do cliente e combos que ele quase fecha', async () => {
+    // CAT1 comprado a cada 20 dias (ha 90, 70, 50 e 30 dias), 5 cx por pedido: ja passou de 1,3x o ritmo (26 dias)
+    // CAT2 comprado 4x, mas ainda dentro do ritmo (ultima ha 3 dias, intervalo ~20)
+    await db.exec(`
+      delete from pedido_itens_sap where ordem like 'SUG%' or ordem = 'CATP1'; -- CATP1 e fixture de outro teste (compra de CAT1 ha 10 dias)
+      delete from pedidos_sap where ordem like 'SUG%' or ordem = 'CATP1';
+      insert into pedidos_sap(ordem, cod_cliente, dt_criacao, valor, status) values
+        ('SUG1', '9500001', current_date - 90, 100, 'Faturado'), ('SUG2', '9500001', current_date - 70, 100, 'Faturado'),
+        ('SUG3', '9500001', current_date - 50, 100, 'Faturado'), ('SUG4', '9500001', current_date - 30, 100, 'Faturado'),
+        ('SUG5', '9500001', current_date - 63, 100, 'Faturado'), ('SUG6', '9500001', current_date - 43, 100, 'Faturado'),
+        ('SUG7', '9500001', current_date - 23, 100, 'Faturado'), ('SUG8', '9500001', current_date - 3, 100, 'Faturado');
+      insert into pedido_itens_sap(ordem, item, cod_produto, quantidade, unidade_venda, denominacao) values
+        ('SUG1', '10', 'CAT1', 5, 'CX', 'Queijo Catalogo'), ('SUG2', '10', 'CAT1', 5, 'CX', 'Queijo Catalogo'),
+        ('SUG3', '10', 'CAT1', 5, 'CX', 'Queijo Catalogo'), ('SUG4', '10', 'CAT1', 5, 'CX', 'Queijo Catalogo'),
+        ('SUG5', '10', 'CAT2', 2, 'CX', 'Presunto Catalogo'), ('SUG6', '10', 'CAT2', 2, 'CX', 'Presunto Catalogo'),
+        ('SUG7', '10', 'CAT2', 2, 'CX', 'Presunto Catalogo'), ('SUG8', '10', 'CAT2', 2, 'CX', 'Presunto Catalogo');
+      delete from combo_itens where combo_id = '22222222-2222-4222-8222-222222222222';
+      delete from combos where id = '22222222-2222-4222-8222-222222222222';
+      insert into combos(id, nome, beneficio, desconto_pct) values ('22222222-2222-4222-8222-222222222222', 'Combo Sug', 'desconto_pct', 5);
+      insert into combo_itens(combo_id, alvo_tipo, alvo_valor, qtd_minima) values
+        ('22222222-2222-4222-8222-222222222222', 'produto', 'CAT1', 5), ('22222222-2222-4222-8222-222222222222', 'produto', 'CAT2', 6);
+    `);
+    const s = await cat.sugestoes('100409', '9500001');
+    assert.deepEqual(s.reposicao.map((r) => r.cod_produto), ['CAT1']); // CAT2 ainda esta dentro do ritmo
+    const r = s.reposicao[0];
+    assert.deepEqual([r.intervalo_dias, r.dias_desde, r.quantidade_tipica, r.produto.preco_tabela, r.produto.unidade], [20, 30, 5, 100, 'KI']);
+    // pedido tipico: CAT1 5 cx + CAT2 2 cx; o combo pede 5 + 6: falta 4 de CAT2
+    const c = s.combos.find((x) => x.nome === 'Combo Sug');
+    assert.ok(c);
+    assert.deepEqual(c.faltas.map((f) => [f.alvo_valor, f.falta]), [['CAT2', 4]]);
+    assert.equal(c.desconto_pct, 5);
+    await rej(cat.sugestoes('100409', '9999999'), 404);
+    await rej(cat.sugestoes('100409', '0'), 422);
   });
 
   server.close();

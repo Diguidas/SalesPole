@@ -3,7 +3,7 @@ import { entrar, useAuth } from '../auth';
 import logo from '../assets/salespole.png';
 import poletech from '../assets/poletech.png';
 
-const campo = { width: '100%', padding: '11px 12px', borderRadius: 10, border: '1px solid #e2e8f0', font: 'inherit', marginBottom: 10 } as const;
+const campo = { width: '100%', padding: '11px 12px', borderRadius: 10, border: '1px solid var(--c-borda)', font: 'inherit', marginBottom: 10 } as const;
 
 /** Entrada por e-mail e senha (usuarios criados no Supabase Auth). Quem entrou mas nao tem acesso ao painel ve o aviso e pode sair. */
 export function LoginScreen({ erro }: { erro?: string | null }) {
@@ -29,7 +29,8 @@ export function LoginScreen({ erro }: { erro?: string | null }) {
   return (
     <div className="login">
       <div className="caixa">
-        <img className="logo" src={logo} alt="Sales Pole" />
+        <img className="logo" src={logo} alt="SalesPole" />
+        <div className="logo-nome">Painel</div>
         {sessao ? (
           <>
             {erro && <p className="erro-msg" style={{ marginTop: 24 }}>{erro}</p>}
@@ -44,7 +45,7 @@ export function LoginScreen({ erro }: { erro?: string | null }) {
           </form>
         )}
         <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 6, marginTop: 28 }}>
-          <small style={{ fontSize: 10, color: '#b0b9c6' }}>desenvolvido por</small>
+          <small style={{ fontSize: 10, color: 'var(--c-suave3)' }}>desenvolvido por</small>
           <img src={poletech} alt="Pole Tech" style={{ height: 16, opacity: 0.85 }} />
         </div>
       </div>

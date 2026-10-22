@@ -161,7 +161,7 @@ export class ConsultaPainelService {
     const [cli, rc, itens, canc, par] = await Promise.all([
       this.sb.from('clientes').select('cod_cliente, nome_fantasia, razao_social').eq('cod_cliente', ped.cod_cliente).maybeSingle(),
       this.sb.from('rota_clientes').select('rota').eq('cod_cliente', ped.cod_cliente).order('rota').limit(1),
-      this.sb.from('pedido_itens_sap').select('item, cod_produto, denominacao, quantidade, unidade_venda, valor_unitario, recusa, cod_recusa').eq('ordem', ordem).order('item'),
+      this.sb.from('pedido_itens_sap').select('item, cod_produto, denominacao, quantidade, unidade_venda, valor_unitario, recusa, cod_recusa, situacao, qtd_faturada, valor_faturado').eq('ordem', ordem).order('item'),
       this.sb.from('pedido_cancelamentos').select('resultado, status_antes, motivo, http, por, criado_em').eq('ordem', ordem).order('criado_em', { ascending: false }).limit(10),
       this.sb.from('parametros').select('valor').eq('chave', 'status_cancelaveis').maybeSingle(),
     ]);
@@ -181,7 +181,7 @@ export class ConsultaPainelService {
       cliente: (cli.data as Linha | null)?.nome_fantasia || (cli.data as Linha | null)?.razao_social || null,
       rota,
       vendedores,
-      itens: ((itens.data ?? []) as Linha[]).map((i) => ({ ...i, quantidade: i.quantidade == null ? null : Number(i.quantidade), valor_unitario: i.valor_unitario == null ? null : Number(i.valor_unitario) })),
+      itens: ((itens.data ?? []) as Linha[]).map((i) => ({ ...i, quantidade: i.quantidade == null ? null : Number(i.quantidade), valor_unitario: i.valor_unitario == null ? null : Number(i.valor_unitario), qtd_faturada: i.qtd_faturada == null ? null : Number(i.qtd_faturada), valor_faturado: i.valor_faturado == null ? null : Number(i.valor_faturado) })),
       cancelamentos: canc.data ?? [],
       cancelavel: liberados.includes(status),
       pedido_app_id: ((origemApp ?? []) as Linha[])[0]?.id ?? null,

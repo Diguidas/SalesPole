@@ -154,7 +154,7 @@ describe('camada de dados do app', () => {
   test('migracao cria o schema e e idempotente', async () => {
     await migrar(db); // 2a vez nao pode falhar nem apagar nada
     const v = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
-    assert.equal(v?.user_version, 13);
+    assert.equal(v?.user_version, 15);
     assert.equal((await db.getAllAsync('SELECT 1 FROM clientes')).length, 3);
   });
 
@@ -587,7 +587,7 @@ describe('bonificacao, incentivos e cadastros do painel', () => {
 
   test('migracao cria as tabelas dos cadastros do painel e as colunas da bonificacao', async () => {
     const v = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
-    assert.equal(v?.user_version, 13);
+    assert.equal(v?.user_version, 15);
     for (const t of ['bonificacao_tipos', 'centros_custo', 'destaques', 'incentivos']) {
       assert.ok((await db.getAllAsync(`SELECT 1 FROM ${t}`)).length >= 0, t);
     }

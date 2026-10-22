@@ -18,6 +18,41 @@ const num = (v: unknown) => (v == null ? null : Number(v));
 export class ProdutosPainelService {
   constructor(@Inject(SUPABASE) private readonly sb: SupabaseClient) {}
 
+  private cacheOpcoes: { em: number; dados: Record<string, Array<{ codigo: string; descricao: string; extra?: string | null }>> } | null = null;
+
+  /**
+   * Opcoes para escolher (nada digitado) nos descontos, avisos e perguntas: escritorio, canal, equipe, tipo de estabelecimento,
+   * linha, grupo, categoria, marca e listas de preco (a lista sozinha, "L", ou a lista com o grupo de preco do cliente, "L.G").
+   */
+  async opcoesEscopo() {
+    if (this.cacheOpcoes && Date.now() - this.cacheOpcoes.em < 10 * 60_000) return this.cacheOpcoes.dados;
+    const { data, error } = await this.sb.rpc('fn_opcoes_painel');
+    if (error) throw new Error(`fn_opcoes_painel: ${error.message}`);
+    const linhas = (data ?? []) as Array<{ campo: string; codigo: string; descricao: string; extra: string | null }>;
+    const de = (campo: string) =>
+      linhas
+        .filter((x) => x.campo === campo && x.codigo && !/^(n[aã]o usar|\[inativo\])/i.test((x.descricao ?? '').trim()))
+        .map((x) => ({ codigo: x.codigo, descricao: x.descricao || x.codigo, extra: x.extra }))
+        .sort((a, b) => a.descricao.localeCompare(b.descricao, 'pt-BR', { numeric: true }));
+    const nomeGrupo = new Map(de('grupo_preco').map((g) => [g.codigo, g.descricao]));
+    const listas = await this.listasPreco();
+    const lista_preco: Array<{ codigo: string; descricao: string }> = [];
+    for (const l of listas) {
+      lista_preco.push({ codigo: l.pltyp, descricao: l.descricao ? `${l.descricao} (todos os grupos)` : 'todos os grupos' });
+      for (const x of l.grupos_lista) {
+        const grupo = x.kdgrp;
+        const nome = nomeGrupo.get(grupo);
+        lista_preco.push({ codigo: `${l.pltyp}.${grupo}`, descricao: `${l.descricao ?? l.pltyp} · grupo ${grupo}${nome && nome !== grupo ? ` - ${nome}` : ''}` });
+      }
+    }
+    const dados = {
+      escritorio: de('escritorio'), canal: de('canal'), tipo_estabelecimento: de('tipo_estabelecimento'), equipe: de('equipe'),
+      linha: de('linha'), grupo: de('grupo'), categoria: de('categoria'), marca: de('marca'), lista_preco,
+    };
+    this.cacheOpcoes = { em: Date.now(), dados };
+    return dados;
+  }
+
   async listarProdutos(f: { busca?: string; tipo?: string; situacao?: string; pagina?: string }) {
     const situacao = exato(f.situacao, 10);
     if (situacao && !['ativos', 'inativos'].includes(situacao)) throw new UnprocessableEntityException('situacao invalida');
@@ -65,10 +100,19 @@ export class ProdutosPainelService {
   async listasPreco() {
     const { data, error } = await this.sb.rpc('fn_listas_preco_painel');
     if (error) throw new Error(`fn_listas_preco_painel: ${error.message}`);
+    const { data: gr, error: eg } = await this.sb.rpc('fn_listas_grupos_painel');
+    if (eg) throw new Error(`fn_listas_grupos_painel: ${eg.message}`);
+    const grupos = (gr ?? []) as Linha[];
     return ((data ?? []) as Linha[])
       // "00" sem nome e sem preco e so o cliente sem lista no SAP
       .filter((l) => !(l.pltyp === '00' && !l.descricao && Number(l.produtos) === 0))
-      .map((l) => ({ pltyp: l.pltyp as string, descricao: (l.descricao as string) ?? null, clientes: Number(l.clientes), produtos: Number(l.produtos), grupos: Number(l.grupos) }));
+      .map((l) => ({ pltyp: l.pltyp as string, descricao: (l.descricao as string) ?? null, clientes: Number(l.clientes), produtos: Number(l.produtos), grupos: Number(l.grupos),
+        grupos_lista: grupos
+          // so grupo com preco proprio vigente (sem ele o cliente paga o preco da lista)
+          .filter((g) => g.pltyp === l.pltyp && Number(g.produtos) > 0)
+          .map((g) => ({ kdgrp: g.kdgrp as string, descricao: (g.descricao as string) ?? null, produtos: Number(g.produtos), clientes: Number(g.clientes) }))
+          .sort((x, y) => x.kdgrp.localeCompare(y.kdgrp, 'pt-BR', { numeric: true })),
+      }));
   }
 
   /** Uma lista: produtos com preco (vigentes e vencidos) e a primeira pagina de clientes. */

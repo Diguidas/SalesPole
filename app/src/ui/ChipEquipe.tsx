@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Alert, Pressable, StyleSheet, Text } from 'react-native';
 import { useEquipe } from '@/lib/equipe';
-import { cor } from './theme';
+import { cor, estilosTema } from './theme';
 
 /**
  * Lembrete fixo no cabecalho enquanto o supervisor/gerente opera como um vendedor: tudo que ele fizer
@@ -30,7 +30,7 @@ export function ChipEquipe() {
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   chip: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: cor.amarelo, borderRadius: 12, paddingHorizontal: 8, paddingVertical: 4, marginRight: 8, maxWidth: 130 },
   texto: { fontSize: 12, fontWeight: '800', color: cor.primariaEscura, flexShrink: 1 },
-});
+}));

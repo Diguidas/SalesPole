@@ -47,9 +47,27 @@ const flag = (b: Linha, c: string, padrao = false) => (b[c] == null ? padrao : b
 
 const TIPOS_PERGUNTA = ['texto', 'sim_nao', 'numero', 'opcoes'];
 const ESCOPOS_PERGUNTA = ['geral', 'vendedor', 'escritorio', 'canal', 'cliente'];
-const ESCOPOS = ['geral', 'produto', 'cliente', 'vendedor', 'canal', 'escritorio'];
+const ESCOPOS = ['geral', 'produto', 'cliente', 'vendedor', 'canal', 'escritorio', 'lista_preco', 'equipe', 'tipo_estabelecimento'];
 
 export const CADASTROS: Record<string, Cadastro> = {
+  bi: {
+    tabela: 'bi_paineis',
+    chave: 'id',
+    ordem: [['ordem', true], ['nome', true]],
+    validar: (b) => {
+      const url = texto(b, 'url', 'Link', { max: 1000, obrigatorio: true })!;
+      if (!/^https:\/\/[^\s]+$/i.test(url)) throw erro('O link precisa comecar com https://');
+      const onde = texto(b, 'onde', 'Onde aparece', { max: 10 }) ?? 'painel';
+      if (!['painel', 'app', 'ambos'].includes(onde)) throw erro('Onde aparece invalido');
+      return {
+        nome: texto(b, 'nome', 'Nome', { max: 60, obrigatorio: true }),
+        url,
+        onde,
+        ordem: Math.trunc(numero(b, 'ordem', 'Ordem', { min: 0, max: 9999 })),
+        ativo: flag(b, 'ativo', true),
+      };
+    },
+  },
   'tipos-bonificacao': {
     tabela: 'bonificacao_tipos',
     chave: 'codigo',
@@ -192,7 +210,9 @@ export const CADASTROS: Record<string, Cadastro> = {
     validar: (b) => {
       const escopo = texto(b, 'escopo', 'Escopo', { max: 20 }) ?? 'geral';
       if (!ESCOPOS.includes(escopo)) throw erro('Escopo invalido');
-      const escopo_valor = texto(b, 'escopo_valor', 'Valor do escopo', { max: 40 });
+      // varios codigos separados por virgula, sem repeticao (cliente/vendedor sem zeros a esquerda)
+      const valorBruto = texto(b, 'escopo_valor', 'Valor do escopo', { max: 400 });
+      const escopo_valor = valorBruto ? [...new Set(valorBruto.split(/[,;]+/).map((x) => x.trim()).filter(Boolean).map((x) => (escopo === 'vendedor' || escopo === 'cliente' ? x.replace(/^0+/, '') || '0' : x)))].join(',') : null;
       const cod_produto = texto(b, 'cod_produto', 'Produto', { max: 40 });
       if (escopo !== 'geral' && escopo !== 'produto' && !escopo_valor) throw erro('Informe o valor do escopo (cliente, vendedor, canal ou escritorio)');
       if (escopo === 'produto' && !cod_produto) throw erro('Escopo "produto" exige o produto');
@@ -221,24 +241,27 @@ export const CADASTROS: Record<string, Cadastro> = {
 /** Status do pedido como o SAP devolve (salespole_pedidos); o painel oferece estes + os que ja apareceram nos pedidos. */
 export const STATUS_SAP_CONHECIDOS = ['Faturado', 'Faturado Parcial', 'A Faturar', 'Recusado', 'Aguardando Liberação', 'Liberado para faturamento'];
 
+/** Lista de status do SAP: tira vazios e repetidos (o app e a API comparam sem diferenciar maiuscula/minuscula). */
+const listaDeStatus = (v: unknown): string[] => {
+  if (!Array.isArray(v)) throw erro('Informe a lista de status');
+  if (v.length > 20) throw erro('No maximo 20 status');
+  const vistos = new Set<string>();
+  const lista: string[] = [];
+  for (const x of v) {
+    const t = String(x ?? '').trim();
+    if (!t) continue;
+    if (t.length > 60) throw erro('Cada status tem no maximo 60 caracteres');
+    if (vistos.has(t.toLowerCase())) continue;
+    vistos.add(t.toLowerCase());
+    lista.push(t);
+  }
+  return lista;
+};
+
 /** Parametros que o painel pode alterar (tabela parametros: chave -> valor json). */
 export const PARAMETROS: Record<string, { validar: (v: unknown) => unknown }> = {
   // em quais status do pedido o vendedor pode cancelar pelo app; vazio = cancelamento desligado
-  status_cancelaveis: {
-    validar: (v) => {
-      if (!Array.isArray(v)) throw erro('Informe a lista de status');
-      if (v.length > 20) throw erro('No maximo 20 status');
-      const vistos = new Set<string>();
-      const lista: string[] = [];
-      for (const x of v) {
-        const t = String(x ?? '').trim();
-        if (!t) continue;
-        if (t.length > 60) throw erro('Cada status tem no maximo 60 caracteres');
-        if (vistos.has(t.toLowerCase())) continue; // o app e a API comparam sem diferenciar maiuscula/minuscula
-        vistos.add(t.toLowerCase());
-        lista.push(t);
-      }
-      return lista;
-    },
-  },
+  status_cancelaveis: { validar: listaDeStatus },
+  // status cujos itens sao atualizados a cada sincronizacao (os demais so tem os itens buscados quando ainda nao existem); vazio = todos os pedidos dos ultimos 15 dias, sem filtro de status
+  status_atualizar_sync: { validar: listaDeStatus },
 };

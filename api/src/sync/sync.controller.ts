@@ -59,7 +59,7 @@ export class SyncController {
 
     const { data: vend } = await this.sb
       .from('vendedores')
-      .select('nome')
+      .select('nome, equipe')
       .eq('cod_vendedor', v.codVendedor)
       .maybeSingle();
 
@@ -105,13 +105,13 @@ export class SyncController {
       (r) =>
         (!r.vigencia_ini || r.vigencia_ini <= hojeIso) &&
         (!r.vigencia_fim || r.vigencia_fim >= hojeIso) &&
-        (r.escopo !== 'vendedor' || r.escopo_valor === v.codVendedor),
+        (r.escopo !== 'vendedor' || (r.escopo_valor ?? '').split(',').includes(v.codVendedor)),
     );
 
     // combos (tela Desconto do painel): vigentes hoje; os de vendedor so do vendedor logado; cliente/canal/escritorio o app confere na hora
     const combosBrutos = (await this.sb
       .from('combos')
-      .select('id, nome, escopo, escopo_valor, beneficio, brinde_cod_produto, brinde_qtd, desconto_pct, desconto_extra_max_pct, repete, max_repeticoes, vigencia_ini, vigencia_fim')
+      .select('id, nome, escopo, escopo_valor, beneficio, brinde_cod_produto, brinde_qtd, desconto_pct, desconto_extra_max_pct, repete, max_repeticoes, faixas, vigencia_ini, vigencia_fim')
       .eq('ativo', true)
       .then(this.ok)) as Array<{ id: string; escopo: string; escopo_valor: string | null; vigencia_ini: string | null; vigencia_fim: string | null }>;
     const itensCombos = (await this.sb.from('combo_itens').select('combo_id, alvo_tipo, alvo_valor, qtd_minima').then(this.ok)) as Array<{ combo_id: string }>;
@@ -163,7 +163,7 @@ export class SyncController {
     const resposta: Record<string, unknown> = {
       cursor,
       rota,
-      vendedor: { cod: v.codVendedor, nome: vend?.nome ?? null, email: v.email },
+      vendedor: { cod: v.codVendedor, nome: vend?.nome ?? null, email: v.email, equipe: vend?.equipe ?? null },
       carteira,
       clientes,
       produtos,
@@ -210,6 +210,14 @@ export class SyncController {
   }
 
   /** Botao "sincronizar" do app: atualiza agora o operacional (no maximo 1x por minuto). */
+  /** Paineis de BI cadastrados no painel para aparecerem no app (so os ativos). */
+  @Get('bi')
+  async bi() {
+    const { data, error } = await this.sb.from('bi_paineis').select('id, nome, url').eq('ativo', true).in('onde', ['app', 'ambos']).order('ordem').order('nome');
+    if (error) throw error;
+    return data ?? [];
+  }
+
   @Post('refresh')
   async refresh(@VendedorLogado() v: Logado) {
     const agora = Date.now();

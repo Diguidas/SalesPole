@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { cor, espaco, raio } from './theme';
+import { cor, espaco, raio, estilosTema } from './theme';
 
 export interface OpcaoDropdown {
   valor: string;
@@ -73,7 +73,7 @@ export function Dropdown({
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   campo: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: espaco.sm,
     borderWidth: 1, borderColor: cor.borda, borderRadius: raio, paddingHorizontal: espaco.md, paddingVertical: 12, backgroundColor: cor.card,
@@ -84,7 +84,7 @@ const estilos = StyleSheet.create({
   cabecalho: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: espaco.lg, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: cor.borda },
   titulo: { fontSize: 17, fontWeight: '700', color: cor.texto },
   opcao: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: espaco.md, paddingHorizontal: espaco.lg, paddingVertical: 14 },
-  opcaoAtiva: { backgroundColor: '#FFF1E5' },
+  opcaoAtiva: { backgroundColor: cor.primariaFundo },
   opcaoTexto: { flex: 1, fontSize: 15, color: cor.texto },
   vazio: { padding: espaco.lg, color: cor.textoSuave, textAlign: 'center' },
-});
+}));

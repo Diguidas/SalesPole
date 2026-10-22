@@ -30,7 +30,7 @@ import { CombosResumo } from '@/ui/CombosResumo';
 import { FotoProduto } from '@/ui/FotoProduto';
 import { ModalQuantidade } from '@/ui/ModalQuantidade';
 import { seloDoPedido } from '@/ui/status';
-import { cor, espaco, raio } from '@/ui/theme';
+import { cor, espaco, raio, estilosTema } from '@/ui/theme';
 
 export default function PedidoTela() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -582,7 +582,7 @@ function ItemLinha({
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   brinde: { backgroundColor: cor.okFundo, borderColor: cor.ok, borderWidth: 1 },
   conteudo: { padding: espaco.lg, paddingBottom: espaco.xl * 2 },
   cliente: { fontSize: 18, fontWeight: '800', color: cor.texto },
@@ -613,4 +613,4 @@ const estilos = StyleSheet.create({
     backgroundColor: cor.card, borderRadius: raio, borderWidth: 1, borderColor: cor.borda,
     paddingHorizontal: espaco.lg, paddingVertical: 12, fontSize: 15, color: cor.texto,
   },
-});
+}));

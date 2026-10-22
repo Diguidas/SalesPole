@@ -1,5 +1,5 @@
 import { StyleSheet, Text, View } from 'react-native';
-import { cor, espaco } from './theme';
+import { cor, espaco, estilosTema } from './theme';
 
 export interface BarraGrafico {
   rotulo: string;
@@ -31,7 +31,7 @@ export function BarChart({ barras, formato }: { barras: BarraGrafico[]; formato:
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   linha: { flexDirection: 'row', gap: espaco.lg, alignItems: 'flex-end' },
   coluna: { flex: 1, alignItems: 'center', gap: 4 },
   trilho: { height: ALTURA, width: '70%', justifyContent: 'flex-end', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: cor.borda },
@@ -39,4 +39,4 @@ const estilos = StyleSheet.create({
   barraClara: { backgroundColor: cor.amarelo },
   valor: { fontSize: 12, fontWeight: '700', color: cor.texto },
   rotulo: { fontSize: 12, color: cor.textoSuave, textTransform: 'capitalize' },
-});
+}));

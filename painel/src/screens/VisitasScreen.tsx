@@ -135,7 +135,7 @@ export function VisitasScreen() {
             )}
             {v.validacao_obs && <p style={{ margin: '8px 0 0' }}><strong>Observação:</strong> {v.validacao_obs}</p>}
             {(v.respostas ?? []).length > 0 && (
-              <div style={{ margin: '10px 0 0', padding: '10px 12px', background: '#f8fafc', borderRadius: 8 }}>
+              <div style={{ margin: '10px 0 0', padding: '10px 12px', background: 'var(--c-fundo)', borderRadius: 8 }}>
                 <div className="suave" style={{ fontWeight: 700, marginBottom: 4 }}>Respostas do vendedor</div>
                 {v.respostas.map((r) => <div key={r.pergunta_id} style={{ fontSize: 13, padding: '2px 0' }}><span className="suave">{r.pergunta}</span> <strong>{r.resposta}</strong></div>)}
               </div>

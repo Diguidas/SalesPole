@@ -1215,7 +1215,7 @@ METHOD salespole_pedidos.
   "     carteira: ordem de cliente de outro vendedor nao volta.
   "   - dtentrega: pedidos da carteira com data de remessa naquele dia
   "     (qualquer data de criacao) -> tela "remessas de hoje"
-  " Sem SUBMIT zsdr124 (a ZSDT139 deve ser alimentada por job).
+  " SUBMIT zsdr124 so quando vem por ordens (senao a ZSDT139 vem do job).
   " pedido_externo / plataforma permitem ao app reconhecer o pedido que ele
   " mesmo criou (codigo interno gravado em BSTKD_E).
 
@@ -1357,6 +1357,16 @@ METHOD salespole_pedidos.
     FOR ALL ENTRIES IN @lt_vbak
     WHERE vbeln = @lt_vbak-vbeln
       AND posnr = '000000'.
+
+  " ordens pedidas pelo numero: roda a rotina da ZSDT139 antes de ler o ciclo do pedido
+  " (na carteira inteira por data NAO roda: o SUBMIT de centenas de ordens estoura o timeout de 60 s do gateway;
+  " a atualizacao dos itens, que depende da ZSDT139, e pedida pela API so para os status marcados no painel)
+  IF lr_vbeln IS NOT INITIAL.
+    DATA(lr_doc) = VALUE rseloption( FOR v IN lt_vbak ( sign = 'I' option = 'EQ' low = v-vbeln ) ).
+    SUBMIT zsdr124
+      WITH s_doc IN lr_doc
+      AND RETURN.
+  ENDIF.
 
   SELECT vbeln, refaturamento
     FROM zsdt139
@@ -1547,6 +1557,9 @@ METHOD salespole_itens.
            valor_unitario TYPE string,
            recusa         TYPE string,
            cod_recusa     TYPE string,
+           situacao       TYPE string,
+           qtd_faturada   TYPE string,
+           valor_faturado TYPE string,
          END OF ty_item,
          tt_item TYPE STANDARD TABLE OF ty_item WITH EMPTY KEY,
 
@@ -1569,7 +1582,9 @@ METHOD salespole_itens.
         lt_ord      TYPE STANDARD TABLE OF vbak-vbeln WITH EMPTY KEY,
         lt_mat      TYPE STANDARD TABLE OF matnr WITH EMPTY KEY,
         lt_mkl      TYPE STANDARD TABLE OF matkl WITH EMPTY KEY,
-        lv_vu       TYPE p LENGTH 15 DECIMALS 4.
+        lv_vu       TYPE p LENGTH 15 DECIMALS 4,
+        lv_vf       TYPE p LENGTH 15 DECIMALS 4,
+        lv_abgru    TYPE vbap-abgru.
 
   resolve_clientes( IMPORTING et_kunnr = DATA(lt_kunnr) ).
 
@@ -1637,7 +1652,16 @@ METHOD salespole_itens.
 
   SORT lt_vbap BY vbeln posnr.
 
-  SELECT vbeln, posnr, netpr, zmeng, bezei
+  " atualizar=X: roda a rotina que alimenta a ZSDT139 (ciclo do pedido) para estas ordens antes de ler a tabela.
+  " Sem o parametro nao roda (o SUBMIT e pesado: a API so pede para os pedidos nos status marcados no painel).
+  IF mo_request->get_uri_query_parameter( 'atualizar' ) = 'X'.
+    DATA(lr_doc) = VALUE rseloption( FOR v IN lt_vbak ( sign = 'I' option = 'EQ' low = v-vbeln ) ).
+    SUBMIT zsdr124
+      WITH s_doc IN lr_doc
+      AND RETURN.
+  ENDIF.
+
+  SELECT vbeln, posnr, netpr, zmeng, bezei, abgru, qtd_faturada, prc_faturado
     FROM zsdt139
     INTO TABLE @DATA(lt_z139)
     FOR ALL ENTRIES IN @lt_vbak
@@ -1712,7 +1736,7 @@ METHOD salespole_itens.
 
     LOOP AT lt_vbap INTO DATA(ls_vbap) WHERE vbeln = ls_vbak-vbeln.
 
-      CLEAR: ls_item, ls_z139, ls_makt, ls_t023t, ls_t006a, lv_vu.
+      CLEAR: ls_item, ls_z139, ls_makt, ls_t023t, ls_t006a, lv_vu, lv_vf.
 
       READ TABLE lt_z139  INTO ls_z139  WITH KEY vbeln = ls_vbap-vbeln posnr = ls_vbap-posnr BINARY SEARCH.
       READ TABLE lt_makt  INTO ls_makt  WITH KEY matnr = ls_vbap-matnr BINARY SEARCH.
@@ -1733,8 +1757,22 @@ METHOD salespole_itens.
       ls_item-quantidade     = |{ ls_vbap-kwmeng DECIMALS = 3 }|.
       ls_item-unidade_venda  = ls_t006a-mseh3.
       ls_item-valor_unitario = |{ lv_vu DECIMALS = 4 }|.
-      ls_item-recusa         = ls_z139-bezei.
-      ls_item-cod_recusa     = ls_vbap-abgru.
+
+      " BEZEI descreve o que aconteceu com o item: so e RECUSA quando ha codigo de
+      " recusa (ABGRU). Sem codigo e a situacao (ex.: Atendido Parcialmente).
+      lv_abgru = COND #( WHEN ls_z139-abgru IS NOT INITIAL THEN ls_z139-abgru ELSE ls_vbap-abgru ).
+      IF lv_abgru IS NOT INITIAL.
+        ls_item-recusa     = ls_z139-bezei.
+        ls_item-cod_recusa = lv_abgru.
+      ELSE.
+        ls_item-situacao = ls_z139-bezei.
+        " faturado com quantidade/valor diferente do pedido: devolve o final
+        IF ls_z139-qtd_faturada <> 0.
+          lv_vf = ls_z139-prc_faturado / ls_z139-qtd_faturada.
+          ls_item-qtd_faturada   = |{ ls_z139-qtd_faturada DECIMALS = 3 }|.
+          ls_item-valor_faturado = |{ lv_vf DECIMALS = 4 }|.
+        ENDIF.
+      ENDIF.
 
       APPEND ls_item TO ls_ordem-itens.
 

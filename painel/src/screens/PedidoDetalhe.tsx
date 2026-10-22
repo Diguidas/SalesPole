@@ -11,7 +11,7 @@ interface PedidoSapBase {
 interface Detalhe extends PedidoSapBase {
   vendedores: Array<{ cod_vendedor: string; nome: string | null }>;
   notas: Array<{ nota_fiscal?: string; serie?: string; danfe_url?: string; xml_url?: string; boleto_url?: string }> | number;
-  itens: Array<{ item: string; cod_produto: string; denominacao: string | null; quantidade: number | null; unidade_venda: string | null; valor_unitario: number | null; recusa: string | null }>;
+  itens: Array<{ item: string; cod_produto: string; denominacao: string | null; quantidade: number | null; unidade_venda: string | null; valor_unitario: number | null; recusa: string | null; situacao: string | null; qtd_faturada: number | null; valor_faturado: number | null }>;
   cancelavel: boolean;
   pedido_app_id: string | null;
   cancelamentos: Array<{ resultado: string; status_antes: string | null; motivo: string | null; por: string | null; criado_em: string }>;
@@ -20,6 +20,9 @@ interface Detalhe extends PedidoSapBase {
 const moeda = (v: number | null | undefined) => (v == null ? '—' : v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }));
 const dataBR = (d: string | null) => (d ? `${d.slice(8, 10)}/${d.slice(5, 7)}/${d.slice(0, 4)}` : '—');
 const dataHora = (iso: string) => new Date(iso).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+/** Subtotal do item: o que foi faturado de fato (quando o SAP mandou), senao o pedido; recusado = 0. */
+const valorItem = (i: { recusa: string | null; quantidade: number | null; valor_unitario: number | null; qtd_faturada: number | null; valor_faturado: number | null }) =>
+  i.recusa ? 0 : i.qtd_faturada != null ? i.qtd_faturada * (i.valor_faturado ?? i.valor_unitario ?? 0) : (i.quantidade ?? 0) * (i.valor_unitario ?? 0);
 const tomStatus = (s: string | null) => { const t = (s ?? '').toLowerCase(); return t.startsWith('faturado') ? 'ok' : t === 'recusado' ? 'erro' : t ? 'aviso' : ''; };
 
 /** Conteudo da gaveta de um pedido do SAP: itens, notas, cancelamento. */
@@ -81,13 +84,13 @@ export function PedidoDetalhe({ ordem, aoMudar }: { ordem: string; aoMudar?: () 
   }
 
   const notas = d && Array.isArray(d.notas) ? d.notas : [];
-  const total = d?.itens.reduce((a, i) => a + (i.recusa ? 0 : (i.quantidade ?? 0) * (i.valor_unitario ?? 0)), 0) ?? 0;
+  const total = d?.itens.reduce((a, i) => a + valorItem(i), 0) ?? 0;
 
   return (
     <>
         {!d && !erro && <div className="vazio">Carregando…</div>}
         {erro && <p className="erro-msg">{erro}</p>}
-        {aviso && <p style={{ color: '#166534', fontSize: 13 }}>{aviso}</p>}
+        {aviso && <p style={{ color: 'var(--c-ok-texto)', fontSize: 13 }}>{aviso}</p>}
         {d && (
           <>
             <div className="card" style={{ padding: 12 }}>
@@ -113,10 +116,10 @@ export function PedidoDetalhe({ ordem, aoMudar }: { ordem: string; aoMudar?: () 
                 <tbody>
                   {d.itens.map((i) => (
                     <tr key={i.item} style={{ opacity: i.recusa ? 0.6 : 1 }}>
-                      <td>{i.denominacao ?? i.cod_produto} <span className="suave">· {i.cod_produto}</span>{i.recusa ? <div className="erro-msg" style={{ margin: 0 }}>Recusado: {i.recusa}</div> : null}</td>
+                      <td>{i.denominacao ?? i.cod_produto} <span className="suave">· {i.cod_produto}</span>{i.recusa ? <div className="erro-msg" style={{ margin: 0 }}>Recusado: {i.recusa}</div> : null}{!i.recusa && i.situacao ? <div className="suave">{i.situacao}</div> : null}{!i.recusa && i.qtd_faturada != null && i.qtd_faturada !== i.quantidade ? <div className="suave" style={{ color: 'var(--c-aviso)', fontWeight: 600 }}>Faturado: {i.qtd_faturada} {i.unidade_venda ?? ''}</div> : null}</td>
                       <td style={{ textAlign: 'right' }}>{i.quantidade ?? '—'} {i.unidade_venda ?? ''}</td>
                       <td style={{ textAlign: 'right' }}>{moeda(i.valor_unitario)}</td>
-                      <td style={{ textAlign: 'right' }}>{i.recusa ? '—' : moeda((i.quantidade ?? 0) * (i.valor_unitario ?? 0))}</td>
+                      <td style={{ textAlign: 'right' }}>{i.recusa ? '—' : moeda(valorItem(i))}</td>
                     </tr>
                   ))}
                   <tr><td colSpan={3} style={{ textAlign: 'right', fontWeight: 700 }}>Total dos itens</td><td style={{ textAlign: 'right', fontWeight: 700 }}>{moeda(total)}</td></tr>
@@ -149,7 +152,7 @@ export function PedidoDetalhe({ ordem, aoMudar }: { ordem: string; aoMudar?: () 
             </div>
             {podeCancelar && !d.cancelavel && <p className="suave" style={{ marginTop: 8 }}>Neste status ({d.status ?? 'sem status'}) o cancelamento não está liberado. Os status liberados ficam em Parâmetros.</p>}
             {cancelando && (
-              <div className="card" style={{ marginTop: 10, borderColor: '#dc2626' }}>
+              <div className="card" style={{ marginTop: 10, borderColor: 'var(--c-erro)' }}>
                 <strong>Cancelar o pedido {ordem} no SAP?</strong>
                 <div className="suave">Isso não pode ser desfeito. O SAP ainda recusa o que já foi faturado.</div>
                 <textarea placeholder="Motivo (opcional, fica registrado)" value={motivo} onChange={(e) => setMotivo(e.target.value)} maxLength={300} />

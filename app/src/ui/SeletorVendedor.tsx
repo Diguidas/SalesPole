@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { api } from '@/lib/api';
 import { useEquipe, type VendedorEquipe } from '@/lib/equipe';
-import { cor, espaco, raio } from './theme';
+import { cor, espaco, raio, estilosTema } from './theme';
 
 /** Pop-up do modo equipe: "qual vendedor voce quer ver?". Ao escolher, o app passa a ser o app desse vendedor. */
 export function SeletorVendedor() {
@@ -68,7 +68,7 @@ export function SeletorVendedor() {
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   fundo: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: espaco.lg },
   caixa: { backgroundColor: cor.card, borderRadius: raio, padding: espaco.lg, maxHeight: '80%' },
   topo: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: espaco.md },
@@ -79,4 +79,4 @@ const estilos = StyleSheet.create({
   detalhe: { fontSize: 12, color: cor.textoSuave, marginTop: 2 },
   vazio: { textAlign: 'center', color: cor.textoSuave, paddingVertical: espaco.xl },
   erro: { color: cor.erro, paddingVertical: espaco.lg },
-});
+}));

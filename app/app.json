@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "Sales Pole",
+    "name": "SalesPole",
     "slug": "salespole",
     "version": "0.1.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "br.com.polealimentos.salespole"
@@ -31,13 +31,13 @@
       [
         "expo-image-picker",
         {
-          "cameraPermission": "O Sales Pole usa a câmera para fotografar a fachada do cliente na visita."
+          "cameraPermission": "O SalesPole usa a câmera para fotografar a fachada do cliente na visita."
         }
       ],
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "O Sales Pole usa a sua localização para confirmar que você está no cliente ao iniciar a visita."
+          "locationWhenInUsePermission": "O SalesPole usa a sua localização para confirmar que você está no cliente ao iniciar a visita."
         }
       ],
       "expo-sharing"

@@ -15,10 +15,20 @@ interface ProdutoCat {
 interface Item { produto: string; descricao: string; unidade: string; unidade_texto: string; quantidade: string; desconto_manual: string; estoque_cx: number | null }
 interface CotItem {
   produto: string; erro?: string; aviso?: string; preco_tabela: number | null; desconto_auto?: number; desconto_manual?: number; desconto_manual_max?: number;
-  desconto_total?: number; preco_final?: number; subtotal?: number; incentivo?: { qtd_minima: number; desconto_pct: number; extra_max_pct: number } | null;
+  desconto_total?: number; origem_desconto?: 'combo' | 'incentivo' | null; preco_final?: number; subtotal?: number; incentivo?: { qtd_minima: number; desconto_pct: number; extra_max_pct: number } | null;
 }
-interface Cotacao { itens: CotItem[]; total: number; pedido_minimo: number | null }
+interface BrindeCot { produto: string; descricao: string; unidade: string; unidade_texto: string; quantidade: number; combo_id: string | null; combos: string[] }
+interface Cotacao { itens: CotItem[]; total: number; pedido_minimo: number | null; brindes?: BrindeCot[] }
 interface Cad { codigo: string; descricao: string; ativo: boolean }
+/** Sugestoes do cliente (GET /painel/pedido-novo/sugestoes): produtos que passaram do ritmo de compra e combos que ele quase fecha. */
+interface Reposicao { cod_produto: string; descricao: string | null; intervalo_dias: number; dias_desde: number; quantidade_tipica: number; unidade: string | null; produto: ProdutoCat }
+interface ComboFechar {
+  id: string; nome: string; beneficio: string; desconto_pct: number | null;
+  brinde: { cod_produto: string; descricao: string; quantidade: number } | null;
+  faltas: Array<{ alvo_tipo: string; alvo_valor: string; falta: number }>;
+}
+interface Sugestoes { reposicao: Reposicao[]; combos: ComboFechar[] }
+const ROTULO_ALVO: Record<string, string> = { produto: 'do produto', marca: 'da marca', linha: 'da linha', grupo: 'do grupo', categoria: 'da categoria' };
 interface Resultado {
   id: string | null; status: string; codigo?: string; ordens?: Array<{ ordem: string }>; erros?: string[]; erro?: string | null;
   dt_entrega?: string | null; possivel_duplicidade?: unknown[];
@@ -33,7 +43,7 @@ function Foto({ cod, tamanho }: { cod: string; tamanho: number }) {
   const [falhou, setFalhou] = useState(false);
   return (
     <div className="foto-prod" style={{ width: tamanho, height: tamanho }}>
-      {falhou ? <Package size={tamanho * 0.45} color="#94a3b8" /> : <img src={`${FOTOS_URL}/${encodeURIComponent(cod.trim())}.jpg`} alt="" loading="lazy" onError={() => setFalhou(true)} />}
+      {falhou ? <Package size={tamanho * 0.45} color="var(--c-suave2)" /> : <img src={`${FOTOS_URL}/${encodeURIComponent(cod.trim())}.jpg`} alt="" loading="lazy" onError={() => setFalhou(true)} />}
     </div>
   );
 }
@@ -65,6 +75,7 @@ export function NovoPedidoScreen() {
   const [carregandoCat, setCarregandoCat] = useState(false);
   const [itens, setItens] = useState<Item[]>([]);
   const [cot, setCot] = useState<Cotacao | null>(null);
+  const [sug, setSug] = useState<Sugestoes | null>(null);
 
   const [observacao, setObservacao] = useState('');
   const [oc, setOc] = useState('');
@@ -164,7 +175,7 @@ export function NovoPedidoScreen() {
     const t = setTimeout(() => {
       api<Cotacao>('/painel/pedido-novo/cotar', {
         method: 'POST',
-        body: { vendedor: vendedor.cod_vendedor, cliente: cliente.cod_cliente, itens: itens.map((i) => ({ produto: i.produto, quantidade: i.quantidade, desconto_manual: tipo === 'venda' ? i.desconto_manual : '' })) },
+        body: { vendedor: vendedor.cod_vendedor, cliente: cliente.cod_cliente, tipo, itens: itens.map((i) => ({ produto: i.produto, quantidade: i.quantidade, desconto_manual: tipo === 'venda' ? i.desconto_manual : '' })) },
       })
         .then((r) => vivo && setCot(r))
         .catch(() => vivo && setCot(null));
@@ -181,12 +192,29 @@ export function NovoPedidoScreen() {
     return vendedores.filter((v) => !q || v.cod_vendedor.includes(q) || (v.nome ?? '').toLowerCase().includes(q)).slice(0, 8);
   }, [vendedores, buscaVend]);
 
+  // sugestoes do cliente escolhido: o que passou do ritmo de compra dele e os combos que ele quase fecha
+  useEffect(() => {
+    setSug(null);
+    if (!vendedor || !cliente) return;
+    let vivo = true;
+    api<Sugestoes>(`/painel/pedido-novo/sugestoes?vendedor=${vendedor.cod_vendedor}&cliente=${cliente.cod_cliente}`)
+      .then((x) => vivo && setSug(x))
+      .catch(() => vivo && setSug(null)); // sugestao e extra: se falhar, a tela segue sem ela
+    return () => { vivo = false; };
+  }, [vendedor?.cod_vendedor, cliente?.cod_cliente]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const cotDe = (cod: string) => cot?.itens.find((c) => c.produto === cod);
   const noPedido = (cod: string) => itens.find((i) => i.produto === cod);
 
   function adicionar(p: ProdutoCat) {
     setItens((l) => (l.some((i) => i.produto === p.cod_produto) ? l.map((i) => (i.produto === p.cod_produto ? { ...i, quantidade: String(numero(i.quantidade) + 1) } : i)) : [...l, { produto: p.cod_produto, descricao: p.descricao, unidade: p.unidade, unidade_texto: p.unidade_texto, quantidade: '1', desconto_manual: '', estoque_cx: p.estoque_cx }]));
   }
+  /** Adiciona o produto na quantidade que o cliente costuma levar (sem mexer no que ja esta no pedido). */
+  function adicionarComQtd(p: ProdutoCat, q: number) {
+    const qtd = String(Math.max(1, Math.round(q)));
+    setItens((l) => (l.some((i) => i.produto === p.cod_produto) ? l : [...l, { produto: p.cod_produto, descricao: p.descricao, unidade: p.unidade, unidade_texto: p.unidade_texto, quantidade: qtd, desconto_manual: '', estoque_cx: p.estoque_cx }]));
+  }
+  const adicionarReposicao = () => (sug?.reposicao ?? []).forEach((x) => adicionarComQtd(x.produto, x.quantidade_tipica));
   const mudarQtd = (cod: string, delta: number) =>
     setItens((l) => l.flatMap((i) => (i.produto !== cod ? [i] : numero(i.quantidade) + delta <= 0 ? [] : [{ ...i, quantidade: String(Math.round((numero(i.quantidade) + delta) * 1000) / 1000) }])));
   const editar = (cod: string, campo: 'quantidade' | 'desconto_manual', v: string) => setItens((l) => l.map((i) => (i.produto === cod ? { ...i, [campo]: v } : i)));
@@ -219,7 +247,10 @@ export function NovoPedidoScreen() {
             const c = cotDe(i.produto);
             const comDesconto = tipo === 'venda' && !!c?.preco_final && (c.desconto_total ?? 0) > 0;
             return { produto: i.produto, unidade: i.unidade, quantidade: i.quantidade, preco: comDesconto ? c!.preco_final!.toFixed(2) : null };
-          }),
+          }).concat(
+            // brinde de combo: o servidor confere se algum combo do pedido o sustenta e cria a bonificacao
+            tipo === 'venda' ? (cot?.brindes ?? []).map((b) => ({ produto: b.produto, unidade: b.unidade, quantidade: String(b.quantidade), preco: null, brinde: true, combo_id: b.combo_id }) as never) : [],
+          ),
         },
       });
       setResultado(r);
@@ -253,7 +284,7 @@ export function NovoPedidoScreen() {
   return (
     <>
       <h1>Novo pedido</h1>
-      <p className="sub">Cria o pedido em nome do vendedor, com as mesmas regras do app (carteira, preço de tabela, desconto por incentivo, estoque). O vendedor vê o pedido no app na próxima sincronização.</p>
+      <p className="sub">Cria o pedido em nome do vendedor, com as mesmas regras do app (carteira, preço de tabela, desconto por incentivo, combos com brinde, estoque). O vendedor vê o pedido no app na próxima sincronização.</p>
       {resultado && <Resumo r={resultado} />}
       {erro && <p className="erro-msg">{erro}</p>}
 
@@ -349,6 +380,50 @@ export function NovoPedidoScreen() {
             </div>
           )}
 
+          {vendedor && cliente && sug && (sug.reposicao.length > 0 || (tipo === 'venda' && sug.combos.length > 0)) && (
+            <div className="card">
+              <div className="titulo" style={{ marginBottom: 8 }}>Sugestões para este cliente</div>
+              {sug.reposicao.length > 0 && (
+                <>
+                  <div className="secao-titulo">Hora de repor <span className="suave">· passou do ritmo de compra dele</span></div>
+                  {sug.reposicao.map((x) => {
+                    const ja = noPedido(x.cod_produto);
+                    return (
+                      <div key={x.cod_produto} className={`prod-card${ja ? ' no-pedido' : ''}`}>
+                        <Foto cod={x.cod_produto} tamanho={48} />
+                        <div className="prod-info">
+                          <div className="prod-nome">{x.produto.descricao}</div>
+                          <div className="suave">
+                            compra a cada ~{x.intervalo_dias} dias · última há {x.dias_desde} dias · costuma levar {Math.round(x.quantidade_tipica * 10) / 10} {x.unidade ?? x.produto.unidade_texto}
+                          </div>
+                        </div>
+                        <button className={`mais${ja ? ' verde' : ''}`} onClick={() => adicionarComQtd(x.produto, x.quantidade_tipica)} title="Adicionar na quantidade que ele costuma levar">
+                          <Plus size={20} strokeWidth={2.4} />
+                          {ja && <span className="mais-qtd">{ja.quantidade}</span>}
+                        </button>
+                      </div>
+                    );
+                  })}
+                  <div style={{ marginTop: 8 }}><button className="btn" onClick={adicionarReposicao}>Adicionar tudo ({sug.reposicao.length})</button></div>
+                </>
+              )}
+              {tipo === 'venda' && sug.combos.length > 0 && (
+                <>
+                  <div className="secao-titulo">Combos para fechar <span className="suave">· com o que ele costuma comprar</span></div>
+                  {sug.combos.map((c) => (
+                    <div key={c.id} style={{ borderLeft: '4px solid var(--c-aviso-borda)', background: 'var(--c-aviso-fundo)', borderRadius: 8, padding: '8px 12px', marginBottom: 8 }}>
+                      <div style={{ fontWeight: 700 }}>Quase lá: {c.nome}</div>
+                      <div className="suave" style={{ color: 'inherit' }}>
+                        Falta {c.faltas.map((f) => `${Math.round(f.falta * 10) / 10} cx ${ROTULO_ALVO[f.alvo_tipo] ?? ''} ${f.alvo_valor}`.replace('  ', ' ')).join(' e ')} para o cliente{' '}
+                        {c.brinde ? `ganhar ${c.brinde.quantidade} cx de ${c.brinde.descricao}` : `ter ${c.desconto_pct}% de desconto`}.
+                      </div>
+                    </div>
+                  ))}
+                </>
+              )}
+            </div>
+          )}
+
           {vendedor && cliente && (
             <div className="card">
               <div className="titulo" style={{ marginBottom: 8 }}>Produtos</div>
@@ -419,7 +494,8 @@ export function NovoPedidoScreen() {
                         ) : c?.aviso ? c.aviso : 'calculando…'}
                       </div>
                     )}
-                    {tipo === 'venda' && c?.incentivo && (c.desconto_auto ?? 0) > 0 && <div className="suave" style={{ color: '#166534' }}>Incentivo: {c.desconto_auto}% automático (a partir de {c.incentivo.qtd_minima} {i.unidade_texto})</div>}
+                    {tipo === 'venda' && (c?.desconto_auto ?? 0) > 0 && c?.origem_desconto === 'combo' && <div className="suave" style={{ color: 'var(--c-ok-texto)' }}>Combo: {c.desconto_auto}% automático</div>}
+                    {tipo === 'venda' && c?.incentivo && (c.desconto_auto ?? 0) > 0 && c.origem_desconto !== 'combo' && <div className="suave" style={{ color: 'var(--c-ok-texto)' }}>Incentivo: {c.desconto_auto}% automático (a partir de {c.incentivo.qtd_minima} {i.unidade_texto})</div>}
                     {tipo === 'venda' && c?.preco_final != null && (c.desconto_manual_max ?? 0) > 0 && (
                       <label className="suave" style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 2 }}>
                         Desconto extra
@@ -438,11 +514,27 @@ export function NovoPedidoScreen() {
             })}
           </div>
 
+          {tipo === 'venda' && (cot?.brindes ?? []).length > 0 && (
+            <div className="resumo-itens" style={{ marginTop: 8 }}>
+              {(cot?.brindes ?? []).map((b) => (
+                <div className="resumo-item" key={`brinde-${b.produto}`}>
+                  <Foto cod={b.produto} tamanho={44} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div className="prod-nome" style={{ fontSize: 13 }}>{b.descricao}</div>
+                    <div className="suave" style={{ color: 'var(--c-ok-texto)' }}>Brinde do combo{b.combos.length ? `: ${b.combos.join(', ')}` : ''}</div>
+                  </div>
+                  <div className="suave" style={{ whiteSpace: 'nowrap' }}>{b.quantidade.toLocaleString('pt-BR')} {b.unidade_texto}</div>
+                  <div className="resumo-subtotal">Grátis</div>
+                </div>
+              ))}
+            </div>
+          )}
+
           {itens.length > 0 && (
             <>
               <div className="resumo-total"><span>{tipo === 'venda' ? 'Total estimado' : 'Valor de tabela (referência)'}</span><strong>{moeda(totalItens)}</strong></div>
               {minimo ? (
-                <p className={abaixoMinimo ? 'erro-msg' : 'suave'} style={{ margin: '4px 0 0', color: abaixoMinimo ? undefined : '#166534' }}>
+                <p className={abaixoMinimo ? 'erro-msg' : 'suave'} style={{ margin: '4px 0 0', color: abaixoMinimo ? undefined : 'var(--c-ok-texto)' }}>
                   {abaixoMinimo ? `Abaixo do pedido mínimo de ${moeda(minimo)}: faltam ${moeda(minimo - totalItens)}.` : `Pedido mínimo de ${moeda(minimo)} atingido.`}
                 </p>
               ) : null}
@@ -468,28 +560,28 @@ function Resumo({ r }: { r: Resultado }) {
   const aprov = r.status === 'aguardando_aprovacao';
   const fila = r.status === 'recebido' || r.status === 'parcial';
   return (
-    <div className="card" style={{ borderColor: ok ? '#16a34a' : aprov || fila ? '#f59e0b' : '#dc2626' }}>
+    <div className="card" style={{ borderColor: ok ? 'var(--c-ok)' : aprov || fila ? 'var(--c-aviso-borda)' : 'var(--c-erro)' }}>
       {ok && (
         <>
-          <strong style={{ color: '#166534' }}>Pedido criado e enviado ao SAP.</strong>
+          <strong style={{ color: 'var(--c-ok-texto)' }}>Pedido criado e enviado ao SAP.</strong>
           <div className="suave">Ordens: {r.ordens?.map((o) => o.ordem).join(', ') || '—'}{r.dt_entrega ? ` · entrega ${r.dt_entrega.slice(8, 10)}/${r.dt_entrega.slice(5, 7)}/${r.dt_entrega.slice(0, 4)}` : ''}</div>
         </>
       )}
       {aprov && (
         <>
-          <strong style={{ color: '#b45309' }}>Bonificação criada e aguardando aprovação.</strong>
+          <strong style={{ color: 'var(--c-aviso)' }}>Bonificação criada e aguardando aprovação.</strong>
           <div className="suave">Aprove em Pedidos → Bonificações: depois disso o servidor envia ao SAP em até 1 minuto.</div>
         </>
       )}
       {fila && (
         <>
-          <strong style={{ color: '#b45309' }}>Pedido gravado, mas ainda não confirmado pelo SAP.</strong>
+          <strong style={{ color: 'var(--c-aviso)' }}>Pedido gravado, mas ainda não confirmado pelo SAP.</strong>
           <div className="suave">O servidor tenta de novo sozinho a cada minuto. Acompanhe no Monitor.{r.erro ? ` Último retorno: ${r.erro}` : ''}</div>
         </>
       )}
       {(r.status === 'invalido' || r.status === 'conflito' || r.status === 'erro') && (
         <>
-          <strong style={{ color: '#991b1b' }}>O pedido não foi criado.</strong>
+          <strong style={{ color: 'var(--c-erro3)' }}>O pedido não foi criado.</strong>
           <ul className="itens">{(r.erros?.length ? r.erros : [r.erro ?? 'Erro desconhecido']).map((e, n) => <li key={n}>{e}</li>)}</ul>
         </>
       )}

@@ -104,10 +104,11 @@ export async function gravarItensSap(db: SQLiteDatabase, itens: Linha[]) {
     db,
     'pedido_itens_sap',
     ['ordem', 'item', 'cod_produto', 'denominacao', 'grupo', 'quantidade', 'unidade_venda',
-      'valor_unitario', 'recusa', 'cod_recusa'],
+      'valor_unitario', 'recusa', 'cod_recusa', 'situacao', 'qtd_faturada', 'valor_faturado'],
     itens.map((i) => [
       txt(i.ordem), txt(i.item), txt(i.cod_produto), txt(i.denominacao), txt(i.grupo), num(i.quantidade),
       txt(i.unidade_venda), num(i.valor_unitario), txt(i.recusa), txt(i.cod_recusa),
+      txt(i.situacao), num(i.qtd_faturada), num(i.valor_faturado),
     ]),
   );
 }
@@ -254,10 +255,10 @@ export async function aplicarPull(db: SQLiteDatabase, r: PullResposta): Promise<
       await inserir(
         db,
         'combos',
-        ['id', 'nome', 'escopo', 'escopo_valor', 'beneficio', 'brinde_cod_produto', 'brinde_qtd', 'desconto_pct', 'desconto_extra_max_pct', 'repete', 'max_repeticoes', 'itens'],
+        ['id', 'nome', 'escopo', 'escopo_valor', 'beneficio', 'brinde_cod_produto', 'brinde_qtd', 'desconto_pct', 'desconto_extra_max_pct', 'repete', 'max_repeticoes', 'itens', 'faixas'],
         r.combos.map((x) => [
           txt(x.id), txt(x.nome), txt(x.escopo) ?? 'geral', txt(x.escopo_valor), txt(x.beneficio), txt(x.brinde_cod_produto), num(x.brinde_qtd),
-          num(x.desconto_pct), num(x.desconto_extra_max_pct) ?? 0, flag(x.repete), num(x.max_repeticoes), JSON.stringify(Array.isArray(x.itens) ? x.itens : []),
+          num(x.desconto_pct), num(x.desconto_extra_max_pct) ?? 0, flag(x.repete), num(x.max_repeticoes), JSON.stringify(Array.isArray(x.itens) ? x.itens : []), JSON.stringify(Array.isArray(x.faixas) ? x.faixas : []),
         ]),
       );
     }

@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: salespole-api
+    runtime: node
+    plan: free
+    region: oregon
+    rootDir: api
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm run start:prod
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: SAP_BASE_URL
+        sync: false
+      - key: SAP_USER
+        sync: false
+      - key: SAP_PASSWORD
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: PAINEL_ORIGENS
+        sync: false
+      - key: SYNC_ENABLED
+        value: "true"

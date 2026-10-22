@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
 import { Image, StyleSheet, View } from 'react-native';
 import { FOTOS_URL } from '@/lib/config';
-import { cor } from './theme';
+import { cor, estilosTema } from './theme';
 
 /**
  * Foto do produto, do bucket publico do Supabase (<cod_produto>.jpg).
@@ -27,6 +27,6 @@ export function FotoProduto({ cod, tamanho = 56 }: { cod: string; tamanho?: numb
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   caixa: { borderRadius: 10, backgroundColor: '#fff', borderWidth: StyleSheet.hairlineWidth, borderColor: cor.borda, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
-});
+}));

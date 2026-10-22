@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { ReactNode } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View, ViewStyle } from 'react-native';
-import { cor, espaco, raio } from './theme';
+import { cor, espaco, raio, estilosTema } from './theme';
 
 export function Card({ children, onPress, style }: { children: ReactNode; onPress?: () => void; style?: ViewStyle }) {
   const conteudo = <View style={[estilos.card, style]}>{children}</View>;
@@ -14,17 +14,17 @@ export function Card({ children, onPress, style }: { children: ReactNode; onPres
 }
 
 type Tom = 'ok' | 'aviso' | 'erro' | 'neutro';
-const TONS: Record<Tom, { fundo: string; texto: string }> = {
+const tons = (): Record<Tom, { fundo: string; texto: string }> => ({
   ok: { fundo: cor.okFundo, texto: cor.ok },
   aviso: { fundo: cor.avisoFundo, texto: cor.aviso },
   erro: { fundo: cor.erroFundo, texto: cor.erro },
   neutro: { fundo: cor.neutroFundo, texto: cor.textoSuave },
-};
+});
 
 export function Selo({ texto, tom = 'neutro' }: { texto: string; tom?: Tom }) {
   return (
-    <View style={[estilos.selo, { backgroundColor: TONS[tom].fundo }]}>
-      <Text style={[estilos.seloTexto, { color: TONS[tom].texto }]}>{texto}</Text>
+    <View style={[estilos.selo, { backgroundColor: tons()[tom].fundo }]}>
+      <Text style={[estilos.seloTexto, { color: tons()[tom].texto }]}>{texto}</Text>
     </View>
   );
 }
@@ -105,7 +105,7 @@ export function Carregando() {
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   card: {
     backgroundColor: cor.card, borderRadius: raio, padding: espaco.lg,
     borderWidth: StyleSheet.hairlineWidth, borderColor: cor.borda,
@@ -132,4 +132,4 @@ const estilos = StyleSheet.create({
   segmentoTexto: { fontSize: 14, fontWeight: '600', color: cor.textoSuave },
   segmentoTextoAtivo: { color: cor.texto },
   centro: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: cor.fundo },
-});
+}));

@@ -1,12 +1,20 @@
 // Combos de desconto no servidor (tabelas combos + combo_itens, cadastradas no painel).
-// Mesma regra do app (app/src/domain/combo.ts): se mudar uma, mude a outra. Resumo:
+// O nucleo do calculo vive em shared/regras/combo.ts e e o MESMO do app (app/src/domain/combo.ts). Resumo:
 //  - condicao = itens (produto | marca | linha | grupo | categoria) com quantidade minima em caixas; cada linha do pedido
 //    conta para UM item (os de produto pegam primeiro); combo completo = todos atingiram o minimo;
 //  - com `repete` vale uma vez para cada vez que a condicao cabe (ate max_repeticoes), senao uma vez so;
+//  - cada item aceita VARIOS materiais (alvo_valor com codigos separados por virgula = qualquer um);
+//  - `faixas` (combo sem repeticao): o beneficio sobe pelo total de caixas da condicao;
 //  - beneficio: brinde (item de preco zero) ou desconto % nos produtos da condicao (vale o maior entre combo e incentivo).
 // Aqui o servidor CONFERE o que o app mandou: o brinde precisa caber no que os combos do pedido dao.
 
 import type { ClassificacaoSrv, ContextoIncentivo } from './pedido.incentivo';
+import { avaliarCondicao, beneficioDaFaixa, EPS, faixaAtingida, itemCasa, registrarDescontoCombo, semSubstituidos, vezesDoCombo } from './regras/combo';
+import type { FaixaCombo } from './regras/combo';
+import { escopoServe } from './regras/incentivo';
+
+export { faixaAtingida, itemCasa };
+export type { FaixaCombo };
 
 export interface ItemCondicaoRow {
   alvo_tipo: string;
@@ -29,6 +37,8 @@ export interface ComboRow {
   desconto_extra_max_pct: number | string;
   repete: boolean;
   max_repeticoes: number | null;
+  /** degraus do beneficio pelo total de caixas da condicao (so combo sem repeticao) */
+  faixas?: FaixaCombo[] | null;
   vigencia_ini: string | null;
   vigencia_fim: string | null;
   ativo: boolean;
@@ -59,53 +69,12 @@ export interface ResultadoComboSrv {
   descontoPorProduto: Record<string, { pct: number; extra: number }>;
 }
 
-const norm = (tipo: string, v: string | null | undefined): string => {
-  const t = (v ?? '').trim().toLowerCase();
-  return tipo === 'marca' || tipo === 'produto' ? t : t.replace(/^0+(?=\d)/, '');
-};
-
-const lista = (v: string | null) => (v ?? '').split(',').map((x) => x.trim()).filter(Boolean);
-
-function comboVale(c: ComboRow, ctx: ContextoIncentivo): boolean {
+export function comboVale(c: ComboRow, ctx: ContextoIncentivo): boolean {
   if (!c.ativo) return false;
   if (c.vigencia_ini && c.vigencia_ini > ctx.hoje) return false;
   if (c.vigencia_fim && c.vigencia_fim < ctx.hoje) return false;
-  switch (c.escopo) {
-    case 'geral':
-      return true;
-    case 'cliente':
-      return lista(c.escopo_valor).includes(ctx.codCliente);
-    case 'vendedor':
-      return lista(c.escopo_valor).includes(ctx.codVendedor);
-    case 'canal':
-      return lista(c.escopo_valor).some((x) => ctx.canais.includes(x));
-    case 'escritorio':
-      return lista(c.escopo_valor).some((x) => ctx.escritorios.includes(x));
-    default:
-      return false;
-  }
+  return c.escopo !== 'produto' && escopoServe(c.escopo, c.escopo_valor, ctx);
 }
-
-function itemCasa(it: ItemCondicaoRow, produto: string, cls?: ClassificacaoSrv | null): boolean {
-  const alvo = norm(it.alvo_tipo, it.alvo_valor);
-  if (!alvo) return false;
-  switch (it.alvo_tipo) {
-    case 'produto':
-      return norm('produto', produto) === alvo;
-    case 'marca':
-      return norm('marca', cls?.marca) === alvo;
-    case 'linha':
-      return norm('linha', cls?.linha_id) === alvo;
-    case 'grupo':
-      return norm('grupo', cls?.grupo_id) === alvo;
-    case 'categoria':
-      return norm('categoria', cls?.categoria_id) === alvo;
-    default:
-      return false;
-  }
-}
-
-const EPS = 1e-9;
 
 /** Combos que valem para o pedido (so os itens que NAO sao brinde entram em `linhas`). */
 export function avaliarCombosSrv(
@@ -119,43 +88,30 @@ export function avaliarCombosSrv(
   const brindesPorCombo: BrindeDoCombo[] = [];
   const descontoPorProduto: ResultadoComboSrv['descontoPorProduto'] = {};
 
+  const completos: Array<{ c: ComboRow; vezes: number; usados: Set<string>; totalCondicao: number }> = [];
   for (const c of combos) {
     if (!comboVale(c, ctx) || !c.itens?.length) continue;
-    const ordem = [...c.itens].sort((a, b) => Number(b.alvo_tipo === 'produto') - Number(a.alvo_tipo === 'produto'));
-    const restante = linhas.map((l) => l.quantidade);
-    const usados = new Set<string>();
-    const razoes: number[] = [];
+    const r = avaliarCondicao(
+      c.itens,
+      linhas.map((l) => ({ produto: l.produto, qtd: l.quantidade })),
+      classificacaoPorProduto,
+    );
+    if (!r.completo) continue;
+    completos.push({ c, vezes: vezesDoCombo(c, r.razoes), usados: r.usados, totalCondicao: r.total });
+  }
 
-    for (const it of ordem) {
-      const min = Number(it.qtd_minima);
-      let total = 0;
-      linhas.forEach((l, n) => {
-        if (restante[n] > 0 && itemCasa(it, l.produto, classificacaoPorProduto[l.produto])) {
-          total += restante[n];
-          restante[n] = 0;
-          usados.add(l.produto);
-        }
-      });
-      razoes.push(min > 0 ? Math.floor(total / min + EPS) : 0);
-    }
-    if (!razoes.every((r) => r >= 1)) continue;
+  for (const { c, vezes, usados, totalCondicao } of semSubstituidos(completos, (x) => x.c)) {
+    const faixa = c.repete ? null : faixaAtingida(c.faixas, totalCondicao);
+    const { brindeQtd, descontoPct } = beneficioDaFaixa(c, faixa);
 
-    const limite = c.max_repeticoes && c.max_repeticoes > 0 ? c.max_repeticoes : Infinity;
-    const vezes = c.repete ? Math.min(Math.min(...razoes), limite) : 1;
-
-    if (c.beneficio === 'produto_gratis' && c.brinde_cod_produto && Number(c.brinde_qtd) > 0) {
-      brindes[c.brinde_cod_produto] = (brindes[c.brinde_cod_produto] ?? 0) + Number(c.brinde_qtd) * vezes;
+    if (c.beneficio === 'produto_gratis' && c.brinde_cod_produto && brindeQtd > 0) {
+      brindes[c.brinde_cod_produto] = (brindes[c.brinde_cod_produto] ?? 0) + brindeQtd * vezes;
       brindesPorCombo.push({
-        comboId: c.id, comboNome: c.nome, produto: c.brinde_cod_produto, quantidade: Number(c.brinde_qtd) * vezes,
+        comboId: c.id, comboNome: c.nome, produto: c.brinde_cod_produto, quantidade: brindeQtd * vezes,
         tipo_bonificacao: c.tipo_bonificacao ?? null, centro_custo: c.centro_custo ?? null,
       });
-    } else if (c.beneficio === 'desconto_pct' && Number(c.desconto_pct) > 0) {
-      const pct = Number(c.desconto_pct);
-      const extra = Number(c.desconto_extra_max_pct) || 0;
-      for (const p of usados) {
-        const atual = descontoPorProduto[p];
-        if (!atual || pct > atual.pct || (pct === atual.pct && extra > atual.extra)) descontoPorProduto[p] = { pct, extra };
-      }
+    } else if (c.beneficio === 'desconto_pct' && descontoPct > 0) {
+      registrarDescontoCombo(descontoPorProduto, usados, descontoPct, c.desconto_extra_max_pct);
     }
   }
   return { brindes, brindesPorCombo, descontoPorProduto };

@@ -1,5 +1,7 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 import { avaliarCombos, comBrindes, type Combo, type ResultadoCombos } from '@/domain/combo';
+import { oportunidadesDeCombo } from '@/domain/oportunidade';
+import type { CompraDoCliente } from '@/domain/reposicao';
 import { ajustarDescontos, type Classificacao, type ContextoIncentivo, type Incentivo } from '@/domain/incentivo';
 import type { ItemPedido } from '@/domain/pedido';
 import { carregarCombos } from './combos';
@@ -26,8 +28,11 @@ export async function carregarIncentivos(db: SQLiteDatabase, codCliente: string,
     `SELECT id, cod_produto, escopo, escopo_valor, linha_id, grupo_id, categoria_id, marca, qtd_minima, desconto_pct, desconto_extra_max_pct FROM incentivos`,
   );
   let codVendedor = '';
+  let equipe: string | null = null;
   try {
-    codVendedor = (JSON.parse((await lerMeta(db, 'vendedor')) ?? '{}') as { cod?: string }).cod ?? '';
+    const v = JSON.parse((await lerMeta(db, 'vendedor')) ?? '{}') as { cod?: string; equipe?: string | null };
+    codVendedor = v.cod ?? '';
+    equipe = v.equipe ?? null;
   } catch {
     codVendedor = '';
   }
@@ -39,6 +44,10 @@ export async function carregarIncentivos(db: SQLiteDatabase, codCliente: string,
       codVendedor,
       canais: unicos(areas.map((a) => a.canal?.codigo)),
       escritorios: unicos(areas.map((a) => a.escritorio?.codigo)),
+      // lista sozinha ("L") e lista com o grupo de preco do cliente ("L.G")
+      listasPreco: unicos(areas.flatMap((a) => (a.lista_preco?.codigo ? [a.lista_preco.codigo, a.rede?.codigo ? `${a.lista_preco.codigo}.${a.rede.codigo}` : null] : []))),
+      tiposEstabelecimento: unicos(areas.map((a) => a.tipo_estabelecimento?.codigo)),
+      equipes: unicos([equipe]),
     },
     combos,
     brindes: await produtosDeBrinde(db, combos),
@@ -87,6 +96,32 @@ export function aplicarRegras(
 }
 
 /** Desconto maximo da lista de preco por produto (para recalcular os descontos do carrinho). */
+/**
+ * Combos que o cliente quase fecha com o que costuma comprar (pedido tipico dos ultimos 12 meses).
+ * A classificacao (linha, grupo, categoria, marca) dos produtos vem do cadastro local, para os combos por classificacao.
+ */
+export async function oportunidadesDoCliente(db: SQLiteDatabase, compras: CompraDoCliente[], dados: DadosIncentivo, max = 3): Promise<ResultadoCombos> {
+  if (!dados.combos.length || !compras.length) return { aplicados: [], brindes: [], descontoPorProduto: {}, incompletos: [] };
+  const codigos = compras.map((c) => c.cod_produto);
+  const rows: Array<{ cod_produto: string; dados: string | null }> = [];
+  for (let i = 0; i < codigos.length; i += 400) {
+    const lote = codigos.slice(i, i + 400);
+    rows.push(...(await db.getAllAsync<{ cod_produto: string; dados: string | null }>(
+      `SELECT cod_produto, dados FROM produtos WHERE cod_produto IN (${lote.map(() => '?').join(',')})`,
+      ...lote,
+    )));
+  }
+  const cls: Record<string, Classificacao | undefined> = {};
+  for (const r of rows) {
+    try {
+      cls[r.cod_produto] = (JSON.parse(r.dados ?? '{}') as { classificacao?: Classificacao }).classificacao;
+    } catch {
+      cls[r.cod_produto] = undefined;
+    }
+  }
+  return oportunidadesDeCombo(dados.combos, compras, dados.ctx, cls, max);
+}
+
 export function descontoMaxPorProduto(info: Record<string, { preco: { descontoMax?: number } | null } | undefined>): Record<string, number> {
   return Object.fromEntries(Object.entries(info).map(([k, v]) => [k, v?.preco?.descontoMax ?? 0]));
 }

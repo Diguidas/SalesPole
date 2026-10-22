@@ -6,7 +6,8 @@ import { FlatList, Pressable, ScrollView, StyleSheet, Text, TextInput, View } fr
 import { buscarProdutos, infoProdutos, rotulo, type ProdutoCatalogo } from '@/db/catalogo';
 import { colocarNoCarrinho } from '@/db/carrinho';
 import { useDados, useTickAoFocar } from '@/db/hooks';
-import { aplicarRegras, carregarIncentivos, classificacaoPorProduto } from '@/db/incentivos';
+import { aplicarRegras, carregarIncentivos, classificacaoPorProduto, oportunidadesDoCliente } from '@/db/incentivos';
+import { quantidadeSugerida, sugerirReposicao } from '@/domain/reposicao';
 import { itensDaOrdemSap, lerPedidoApp, salvarItens } from '@/db/pedidos';
 import { listarDestaques, ultimosPedidosDoCliente } from '@/db/produto';
 import { obterCliente, produtosCompradosPeloCliente } from '@/db/queries';
@@ -19,7 +20,7 @@ import { Botao, Card, Secao, Segmentado, Selo, Vazio } from '@/ui/components';
 import { CombosResumo } from '@/ui/CombosResumo';
 import { FotoProduto } from '@/ui/FotoProduto';
 import { ModalQuantidade } from '@/ui/ModalQuantidade';
-import { cor, espaco, raio } from '@/ui/theme';
+import { cor, espaco, raio, estilosTema } from '@/ui/theme';
 
 type Aba = 'produtos' | 'carrinho' | 'sugestao';
 
@@ -122,9 +123,16 @@ export default function ProdutosDoPedido() {
     };
   }, [comprados, corte]);
 
+  // produtos que ja passaram do ritmo de compra deste cliente (ver domain/reposicao.ts)
+  const reposicao = useMemo(() => sugerirReposicao(comprados ?? [], hoje, { max: TOPO }), [comprados, hoje]);
+  const { dados: oportunidades } = useDados(
+    async (d) => (incData && comprados && pedido?.tipo !== 'bonificacao' ? oportunidadesDoCliente(d, comprados, incData) : null),
+    [incData, comprados, pedido?.tipo],
+  );
+
   const codsSugestao = useMemo(
-    () => [...new Set([...sugestoes.semGiro, ...sugestoes.mix, ...sugestoes.ultimos].map((p) => p.cod_produto).concat((destaques ?? []).map((x) => x.cod_produto)))],
-    [sugestoes, destaques],
+    () => [...new Set([...reposicao, ...sugestoes.semGiro, ...sugestoes.mix, ...sugestoes.ultimos].map((p) => p.cod_produto).concat((destaques ?? []).map((x) => x.cod_produto)))],
+    [reposicao, sugestoes, destaques],
   );
   const { dados: infoSug } = useDados(
     async (d): Promise<Record<string, ProdutoCatalogo>> => (cliente && aba === 'sugestao' && codsSugestao.length ? infoProdutos(d, cliente.areas, codsSugestao, hoje) : {}),
@@ -162,6 +170,33 @@ export default function ProdutosDoPedido() {
       ok++;
     }
     setAviso(`${ok} ${ok === 1 ? 'item adicionado' : 'itens adicionados'}${fora ? ` · ${fora} indisponíve${fora === 1 ? 'l' : 'is'}` : ''}`);
+    setRecarga((r) => r + 1);
+  }
+
+  /** Adiciona ao carrinho o que passou do ritmo do cliente, na quantidade que ele costuma levar (respeitando minimo e multiplo). */
+  async function adicionarReposicao() {
+    if (!pedido || !cliente) return;
+    let atual: ItemPedido[] = pedido.itens;
+    let ok = 0;
+    let jaTem = 0;
+    let fora = 0;
+    for (const s of reposicao) {
+      const p = infoSug?.[s.cod_produto];
+      if (!p || !p.disponivel || !p.preco) {
+        fora++;
+        continue;
+      }
+      if (noCarrinho.has(`${p.cod_produto}|${p.unidade}`)) {
+        jaTem++;
+        continue;
+      }
+      // a media do historico so vale se estiver em caixas; senao usa o minimo do produto
+      const emCaixa = !s.unidade || [p.unidadeTexto, p.unidade].some((u) => u.toUpperCase() === s.unidade!.trim().toUpperCase());
+      const q = quantidadeSugerida(emCaixa ? s.quantidadeTipica : 0, p.regra);
+      atual = await colocarNoCarrinho(db, id, atual, p, q, 0, 'somar', { ...(infoCarrinho ?? {}), ...(infoSug ?? {}) }, incData ?? null, pedido.tipo !== 'bonificacao');
+      ok++;
+    }
+    setAviso(`${ok} ${ok === 1 ? 'item adicionado' : 'itens adicionados'}${jaTem ? ` · ${jaTem} já no carrinho` : ''}${fora ? ` · ${fora} indisponíve${fora === 1 ? 'l' : 'is'}` : ''}`);
     setRecarga((r) => r + 1);
   }
 
@@ -334,6 +369,23 @@ export default function ProdutosDoPedido() {
             const porCod = new Map((comprados ?? []).map((c) => [c.cod_produto, c]));
             return (
               <>
+                {reposicao.length ? (
+                  <>
+                    <Secao titulo="Hora de repor" detalhe="passou do ritmo de compra dele" />
+                    {rows(reposicao.map((s) => s.cod_produto), (cod) => {
+                      const s = reposicao.find((x) => x.cod_produto === cod)!;
+                      return `compra a cada ~${s.intervaloDias} dias · última há ${s.diasDesde} dias · costuma levar ${numero(Math.round(s.quantidadeTipica * 10) / 10)} ${s.unidade ?? ''}`;
+                    })}
+                    <Botao titulo={`Adicionar tudo (${reposicao.length})`} tom="neutro" onPress={adicionarReposicao} />
+                  </>
+                ) : null}
+                {oportunidades && oportunidades.incompletos.length ? (
+                  <>
+                    <Secao titulo="Combos para fechar" detalhe="com o que ele costuma comprar" />
+                    <CombosResumo resultado={oportunidades} brindes={incData?.brindes ?? {}} />
+                  </>
+                ) : null}
+
                 <Secao titulo="Destaques e lançamentos" detalhe={dest.length ? `${dest.length}` : undefined} />
                 {dest.length ? (
                   rows(
@@ -437,7 +489,7 @@ export default function ProdutosDoPedido() {
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   brinde: { backgroundColor: cor.okFundo, borderColor: cor.ok, borderWidth: 1 },
   buscaBox: {
     flexDirection: 'row', alignItems: 'center', gap: 8, margin: espaco.lg, marginBottom: espaco.sm, paddingHorizontal: espaco.md,
@@ -477,4 +529,4 @@ const estilos = StyleSheet.create({
     position: 'absolute', left: 0, right: 0, bottom: 0, padding: espaco.lg, backgroundColor: cor.fundo,
     borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: cor.borda,
   },
-});
+}));

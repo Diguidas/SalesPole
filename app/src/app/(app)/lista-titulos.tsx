@@ -6,7 +6,7 @@ import { listarTitulos, type FiltroTitulos, type TituloGeral } from '@/db/querie
 import { dataBR, moeda } from '@/lib/format';
 import { useSync } from '@/lib/sync-context';
 import { Card, Chip, Selo, Vazio } from '@/ui/components';
-import { cor, espaco } from '@/ui/theme';
+import { cor, espaco, estilosTema } from '@/ui/theme';
 
 export default function ListaTitulos() {
   const [filtro, setFiltro] = useState<FiltroTitulos>('todos');
@@ -50,9 +50,9 @@ export default function ListaTitulos() {
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: espaco.md },
   linha: { flexDirection: 'row', alignItems: 'center', gap: espaco.md, marginBottom: espaco.sm },
   titulo: { fontSize: 15, fontWeight: '700', color: cor.texto },
   suave: { fontSize: 13, color: cor.textoSuave },
-});
+}));

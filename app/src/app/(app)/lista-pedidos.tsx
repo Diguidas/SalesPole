@@ -8,7 +8,7 @@ import { dataBR, moeda } from '@/lib/format';
 import { useSync } from '@/lib/sync-context';
 import { Card, Chip, Selo, Vazio } from '@/ui/components';
 import { seloDoPedido } from '@/ui/status';
-import { cor, espaco } from '@/ui/theme';
+import { cor, espaco, estilosTema } from '@/ui/theme';
 
 export default function ListaPedidos() {
   const [filtro, setFiltro] = useState<FiltroPedidos>('todos');
@@ -88,7 +88,7 @@ export default function ListaPedidos() {
   );
 }
 
-const estilos = StyleSheet.create({
+const estilos = estilosTema(() => StyleSheet.create({
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   banner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: cor.avisoFundo, borderColor: cor.amarelo, paddingVertical: 10 },
   bannerTexto: { color: cor.aviso, fontWeight: '700', fontSize: 14 },
@@ -96,4 +96,4 @@ const estilos = StyleSheet.create({
   titulo: { fontSize: 15, fontWeight: '700', color: cor.texto },
   suave: { fontSize: 13, color: cor.textoSuave },
   erro: { fontSize: 12, color: cor.erro },
-});
+}));
