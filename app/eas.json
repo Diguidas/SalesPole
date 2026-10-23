@@ -1,0 +1,14 @@
+{
+  "cli": { "version": ">= 12.0.0", "appVersionSource": "local" },
+  "build": {
+    "apk": {
+      "distribution": "internal",
+      "android": { "buildType": "apk" },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://salespole-api.onrender.com",
+        "EXPO_PUBLIC_SUPABASE_URL": "https://qrychownaibsnpgimmaf.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFyeWNob3duYWlic25wZ2ltbWFmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA5OTAyMDQsImV4cCI6MjEwNjU2NjIwNH0.Wr3rNCBEyDfJSYkGHXsGJVK8muWkgrbcFnPp_AnZzfY"
+      }
+    }
+  }
+}
