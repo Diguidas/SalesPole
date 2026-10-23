@@ -12,7 +12,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#FFFFFF",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
@@ -45,7 +45,19 @@
           "locationWhenInUsePermission": "O SalesPole usa a sua localização para confirmar que você está no cliente ao iniciar a visita."
         }
       ],
-      "expo-sharing"
+      "expo-sharing",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "backgroundColor": "#FFFFFF",
+          "imageWidth": 220,
+          "dark": {
+            "image": "./assets/splash-icon.png",
+            "backgroundColor": "#121212"
+          }
+        }
+      ]
     ],
     "scheme": "salespole",
     "extra": {
