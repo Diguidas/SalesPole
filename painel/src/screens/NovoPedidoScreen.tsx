@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Minus, Package, Plus, Trash2 } from 'lucide-react';
+import { Minus, Plus, Trash2 } from 'lucide-react';
 import { api } from '../api';
+import { useAuth } from '../auth';
+import { Foto, ProdutoPopup, type ProdutoLinha } from './ProdutoPopup';
 
-const FOTOS_URL = ((import.meta.env.VITE_FOTOS_URL as string) || 'https://jebjtpmugcnpxxkdexyg.supabase.co/storage/v1/object/public/lojinha-fotos').replace(/\/$/, '');
 
 interface Vendedor { cod_vendedor: string; nome: string | null; rota: string }
 interface Cliente { cod_cliente: string; nome: string | null; bloqueado: boolean; pedido_minimo: number | null; pagamento_antecipado: boolean }
@@ -11,14 +12,24 @@ interface ProdutoCat {
   cod_produto: string; descricao: string; unidade: string; unidade_texto: string;
   preco_tabela: number | null; desconto_max: number; estoque_cx: number | null; disponivel: boolean;
   origem: 'busca' | 'destaque' | 'lancamento' | 'comprou' | null;
+  /** so no catalogo completo: o centro do cliente tem estoque e este produto tem menos de 1 caixa */
+  sem_estoque?: boolean;
 }
 interface Item { produto: string; descricao: string; unidade: string; unidade_texto: string; quantidade: string; desconto_manual: string; estoque_cx: number | null }
 interface CotItem {
+  /** proxima faixa do incentivo que da mais desconto: "faltam N cx para X%" */
+  proxima_faixa?: { qtd_minima: number; desconto_pct: number; extra_max_pct: number; falta: number } | null;
   produto: string; erro?: string; aviso?: string; preco_tabela: number | null; desconto_auto?: number; desconto_manual?: number; desconto_manual_max?: number;
   desconto_total?: number; origem_desconto?: 'combo' | 'incentivo' | null; preco_final?: number; subtotal?: number; incentivo?: { qtd_minima: number; desconto_pct: number; extra_max_pct: number } | null;
 }
 interface BrindeCot { produto: string; descricao: string; unidade: string; unidade_texto: string; quantidade: number; combo_id: string | null; combos: string[] }
-interface Cotacao { itens: CotItem[]; total: number; pedido_minimo: number | null; brindes?: BrindeCot[] }
+interface BrindeCombo { produto: string; descricao: string | null; quantidade: number }
+/** Combos do carrinho: os que ja fecham e os que o pedido ja comeca a formar (com o que falta). */
+interface ComboCot {
+  aplicados: Array<{ id: string; nome: string; vezes: number; desconto_pct: number | null; brinde: BrindeCombo | null }>;
+  incompletos: Array<{ id: string; nome: string; beneficio: string; desconto_pct: number | null; brinde: BrindeCombo | null; faltas: Array<{ alvo_tipo: string; alvo_valor: string; alvo_descricao: string | null; falta: number }> }>;
+}
+interface Cotacao { itens: CotItem[]; total: number; pedido_minimo: number | null; brindes?: BrindeCot[]; combos?: ComboCot }
 interface Cad { codigo: string; descricao: string; ativo: boolean }
 /** Sugestoes do cliente (GET /painel/pedido-novo/sugestoes): produtos que passaram do ritmo de compra e combos que ele quase fecha. */
 interface Reposicao { cod_produto: string; descricao: string | null; intervalo_dias: number; dias_desde: number; quantidade_tipica: number; unidade: string | null; produto: ProdutoCat }
@@ -36,14 +47,33 @@ interface Resultado {
 
 const moeda = (v: number | null | undefined) => (v == null ? '—' : v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }));
 const numero = (v: string) => Number(String(v).replace(',', '.'));
-const ROTULO_ORIGEM: Record<string, string> = { destaque: 'Destaque', lancamento: 'Lançamento', comprou: 'Comprado há pouco' };
+const qfmt = (v: number) => (Math.round(v * 10) / 10).toLocaleString('pt-BR');
+const ROTULO_ORIGEM: Record<string, string> = { destaque: 'Destaque', lancamento: 'Lançamento', comprou: 'Comprou nos últimos 90 dias' };
 
-/** Foto do produto no bucket publico (<codigo>.jpg); sem foto, um icone no lugar. */
-function Foto({ cod, tamanho }: { cod: string; tamanho: number }) {
-  const [falhou, setFalhou] = useState(false);
+/** Cartao de um produto do catalogo: foto, nome (abre o pop-up com os dados), preco, estoque e o botao de adicionar. */
+function CartaoProduto({ p, ja, adicionar, abrir }: { p: ProdutoCat; ja: Item | undefined; adicionar: (p: ProdutoCat) => void; abrir: (cod: string) => void }) {
+  const semEstoque = p.sem_estoque ?? (p.estoque_cx != null && p.estoque_cx < 1);
   return (
-    <div className="foto-prod" style={{ width: tamanho, height: tamanho }}>
-      {falhou ? <Package size={tamanho * 0.45} color="var(--c-suave2)" /> : <img src={`${FOTOS_URL}/${encodeURIComponent(cod.trim())}.jpg`} alt="" loading="lazy" onError={() => setFalhou(true)} />}
+    <div className={`prod-card${ja ? ' no-pedido' : ''}${p.disponivel && !semEstoque ? '' : ' indisponivel'}`}>
+      <Foto cod={p.cod_produto} tamanho={64} />
+      <div className="prod-info">
+        <button className="link-prod prod-nome" onClick={() => abrir(p.cod_produto)} title="Ver preço, descontos, histórico e ficha do produto">{p.descricao}</button>
+        <div className="suave">
+          Cód. {p.cod_produto} · {p.preco_tabela ? `${moeda(p.preco_tabela)}/${p.unidade_texto}` : 'sem preço de tabela'}
+          {p.estoque_cx != null ? ` · estoque ${Math.floor(p.estoque_cx).toLocaleString('pt-BR')} ${p.unidade_texto}` : ''}
+        </div>
+        <div className="prod-selos">
+          {p.origem && ROTULO_ORIGEM[p.origem] && <span className="selo ok">{ROTULO_ORIGEM[p.origem]}</span>}
+          {semEstoque && <span className="selo aviso">Sem estoque</span>}
+          {!p.disponivel && <span className="selo erro">Indisponível para este cliente</span>}
+        </div>
+      </div>
+      {p.disponivel && (
+        <button className={`mais${ja ? ' verde' : ''}`} onClick={() => adicionar(p)} title="Adicionar ao pedido">
+          <Plus size={20} strokeWidth={2.4} />
+          {ja && <span className="mais-qtd">{ja.quantidade}</span>}
+        </button>
+      )}
     </div>
   );
 }
@@ -51,6 +81,7 @@ function Foto({ cod, tamanho }: { cod: string; tamanho: number }) {
 /** Pedido em nome de um vendedor, como a tela do app: catalogo com fotos a esquerda e o resumo do pedido a direita. */
 export function NovoPedidoScreen() {
   const [params] = useSearchParams();
+  const { usuario } = useAuth();
   const [tipo, setTipo] = useState<'venda' | 'bonificacao'>('venda');
   const [tiposBon, setTiposBon] = useState<Cad[]>([]);
   const [centros, setCentros] = useState<Cad[]>([]);
@@ -72,10 +103,15 @@ export function NovoPedidoScreen() {
 
   const [buscaProd, setBuscaProd] = useState('');
   const [catalogo, setCatalogo] = useState<ProdutoCat[]>([]);
-  const [carregandoCat, setCarregandoCat] = useState(false);
+  const [, setCarregandoCat] = useState(false);
   const [itens, setItens] = useState<Item[]>([]);
   const [cot, setCot] = useState<Cotacao | null>(null);
   const [sug, setSug] = useState<Sugestoes | null>(null);
+  const [popup, setPopup] = useState<string | null>(null); // produto aberto no pop-up
+  const [todos, setTodos] = useState<ProdutoCat[]>([]);
+  const [proximoTodos, setProximoTodos] = useState<number | null>(null);
+  const [carregandoTodos, setCarregandoTodos] = useState(false);
+  const [mostrarIndisp, setMostrarIndisp] = useState(false);
 
   const [observacao, setObservacao] = useState('');
   const [oc, setOc] = useState('');
@@ -85,7 +121,7 @@ export function NovoPedidoScreen() {
 
   // veio da pagina do cliente (?vendedor=&cliente=): ja deixa os dois escolhidos
   useEffect(() => {
-    const cv = params.get('vendedor');
+    const cv = params.get('vendedor') ?? (usuario?.papel === 'vendedor' ? vendedores[0]?.cod_vendedor ?? null : null);
     const cc = params.get('cliente');
     if (!cv || vendedor || vendedores.length === 0) return;
     const v = vendedores.find((x) => x.cod_vendedor === cv.replace(/^0+/, ''));
@@ -101,6 +137,11 @@ export function NovoPedidoScreen() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vendedores]);
+
+  // vendedor no computador: a lista so tem ele, entao ja fica escolhido
+  useEffect(() => {
+    if (usuario?.papel === 'vendedor' && vendedores.length === 1 && !vendedor) setVendedor(vendedores[0]);
+  }, [vendedores]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     api<Vendedor[]>('/painel/pedido-novo/vendedores').then(setVendedores).catch((e) => setErro((e as Error).message));
@@ -153,16 +194,49 @@ export function NovoPedidoScreen() {
     let vivo = true;
     setCarregandoCat(true);
     const t = setTimeout(() => {
-      api<ProdutoCat[]>(`/painel/pedido-novo/produtos?cliente=${cliente.cod_cliente}&q=${encodeURIComponent(buscaProd)}`)
+      api<ProdutoCat[]>(`/painel/pedido-novo/produtos?cliente=${cliente.cod_cliente}&q=`)
         .then((r) => vivo && setCatalogo(r))
         .catch((e) => vivo && setErro((e as Error).message))
         .finally(() => vivo && setCarregandoCat(false));
+    }, 0);
+    return () => {
+      vivo = false;
+      clearTimeout(t);
+    };
+  }, [cliente]);
+
+  // catalogo completo do cliente (so o que da para vender), com busca e em paginas
+  useEffect(() => {
+    setTodos([]);
+    setProximoTodos(null);
+    if (!cliente) return;
+    let vivo = true;
+    setCarregandoTodos(true);
+    const t = setTimeout(() => {
+      api<{ itens: ProdutoCat[]; proximo: number | null }>(`/painel/pedido-novo/catalogo?cliente=${cliente.cod_cliente}&q=${encodeURIComponent(buscaProd.trim())}${mostrarIndisp ? '&todos=1' : ''}`)
+        .then((r) => { if (vivo) { setTodos(r.itens); setProximoTodos(r.proximo); } })
+        .catch((e) => vivo && setErro((e as Error).message))
+        .finally(() => vivo && setCarregandoTodos(false));
     }, buscaProd ? 300 : 0);
     return () => {
       vivo = false;
       clearTimeout(t);
     };
-  }, [cliente, buscaProd]);
+  }, [cliente, buscaProd, mostrarIndisp]);
+
+  async function maisTodos() {
+    if (!cliente || proximoTodos == null) return;
+    setCarregandoTodos(true);
+    try {
+      const r = await api<{ itens: ProdutoCat[]; proximo: number | null }>(`/painel/pedido-novo/catalogo?cliente=${cliente.cod_cliente}&q=${encodeURIComponent(buscaProd.trim())}${mostrarIndisp ? '&todos=1' : ''}&inicio=${proximoTodos}`);
+      setTodos((l) => [...l, ...r.itens.filter((x) => !l.some((y) => y.cod_produto === x.cod_produto))]);
+      setProximoTodos(r.proximo);
+    } catch (e) {
+      setErro((e as Error).message);
+    } finally {
+      setCarregandoTodos(false);
+    }
+  }
 
   // cotacao (preco de tabela, incentivo e total) sempre que muda produto, quantidade ou desconto
   const chaveItens = JSON.stringify(itens.map((i) => [i.produto, i.quantidade, i.desconto_manual]));
@@ -203,6 +277,14 @@ export function NovoPedidoScreen() {
     return () => { vivo = false; };
   }, [vendedor?.cod_vendedor, cliente?.cod_cliente]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /** Pop-up: soma a quantidade escolhida ao que ja esta no pedido (ou adiciona o produto). */
+  function adicionarSomando(p: ProdutoLinha, q: number) {
+    const prod = p as unknown as ProdutoCat;
+    setItens((l) => (l.some((i) => i.produto === prod.cod_produto)
+      ? l.map((i) => (i.produto === prod.cod_produto ? { ...i, quantidade: String(Math.round((numero(i.quantidade) + q) * 1000) / 1000) } : i))
+      : [...l, { produto: prod.cod_produto, descricao: prod.descricao, unidade: prod.unidade, unidade_texto: prod.unidade_texto, quantidade: String(q), desconto_manual: '', estoque_cx: prod.estoque_cx }]));
+  }
+
   const cotDe = (cod: string) => cot?.itens.find((c) => c.produto === cod);
   const noPedido = (cod: string) => itens.find((i) => i.produto === cod);
 
@@ -214,6 +296,19 @@ export function NovoPedidoScreen() {
     const qtd = String(Math.max(1, Math.round(q)));
     setItens((l) => (l.some((i) => i.produto === p.cod_produto) ? l : [...l, { produto: p.cod_produto, descricao: p.descricao, unidade: p.unidade, unidade_texto: p.unidade_texto, quantidade: qtd, desconto_manual: '', estoque_cx: p.estoque_cx }]));
   }
+  // ?duplicar=<ordem>: traz os itens de um pedido anterior do cliente (so o que ainda tem preco e estoque)
+  const duplicar = params.get('duplicar');
+  const [duplicado, setDuplicado] = useState('');
+  const [avisoDup, setAvisoDup] = useState<string[]>([]);
+  useEffect(() => {
+    if (!duplicar || !vendedor || !cliente || duplicado === duplicar) return;
+    setDuplicado(duplicar);
+    api<{ itens: Array<{ quantidade: number; produto: ProdutoCat }>; ignorados: Array<{ cod_produto: string; descricao: string | null; motivo: string }> }>(
+      `/painel/pedido-novo/duplicar?vendedor=${vendedor.cod_vendedor}&cliente=${cliente.cod_cliente}&ordem=${encodeURIComponent(duplicar)}`,
+    )
+      .then((r) => { r.itens.forEach((i) => adicionarComQtd(i.produto, i.quantidade)); setAvisoDup(r.ignorados.map((x) => `${x.descricao ?? x.cod_produto}: ${x.motivo}`)); })
+      .catch((e) => setErro((e as Error).message));
+  }, [duplicar, vendedor, cliente]); // eslint-disable-line react-hooks/exhaustive-deps
   const adicionarReposicao = () => (sug?.reposicao ?? []).forEach((x) => adicionarComQtd(x.produto, x.quantidade_tipica));
   const mudarQtd = (cod: string, delta: number) =>
     setItens((l) => l.flatMap((i) => (i.produto !== cod ? [i] : numero(i.quantidade) + delta <= 0 ? [] : [{ ...i, quantidade: String(Math.round((numero(i.quantidade) + delta) * 1000) / 1000) }])));
@@ -272,7 +367,7 @@ export function NovoPedidoScreen() {
   }
 
   const secoes = useMemo(() => {
-    if (buscaProd.trim().length >= 2) return [{ titulo: `Resultado da busca por "${buscaProd.trim()}"`, itens: catalogo }];
+    if (buscaProd.trim()) return [];
     const dest = catalogo.filter((p) => p.origem === 'destaque' || p.origem === 'lancamento');
     const comp = catalogo.filter((p) => p.origem === 'comprou');
     return [
@@ -287,6 +382,12 @@ export function NovoPedidoScreen() {
       <p className="sub">Cria o pedido em nome do vendedor, com as mesmas regras do app (carteira, preço de tabela, desconto por incentivo, combos com brinde, estoque). O vendedor vê o pedido no app na próxima sincronização.</p>
       {resultado && <Resumo r={resultado} />}
       {erro && <p className="erro-msg">{erro}</p>}
+      {avisoDup.length > 0 && (
+        <div className="card" style={{ borderLeft: '4px solid var(--c-aviso-borda)' }}>
+          <div className="titulo">Pedido duplicado: alguns itens ficaram de fora</div>
+          <ul className="itens">{avisoDup.map((t) => <li key={t}>{t}</li>)}</ul>
+        </div>
+      )}
 
       <div className="novo-grid">
         {/* ------------------------- ESQUERDA: montar o pedido ------------------------- */}
@@ -392,7 +493,7 @@ export function NovoPedidoScreen() {
                       <div key={x.cod_produto} className={`prod-card${ja ? ' no-pedido' : ''}`}>
                         <Foto cod={x.cod_produto} tamanho={48} />
                         <div className="prod-info">
-                          <div className="prod-nome">{x.produto.descricao}</div>
+                          <button className="link-prod prod-nome" onClick={() => setPopup(x.cod_produto)} title="Ver os dados do produto">{x.produto.descricao}</button>
                           <div className="suave">
                             compra a cada ~{x.intervalo_dias} dias · última há {x.dias_desde} dias · costuma levar {Math.round(x.quantidade_tipica * 10) / 10} {x.unidade ?? x.produto.unidade_texto}
                           </div>
@@ -427,40 +528,33 @@ export function NovoPedidoScreen() {
           {vendedor && cliente && (
             <div className="card">
               <div className="titulo" style={{ marginBottom: 8 }}>Produtos</div>
-              <input className="entrada" style={{ width: '100%' }} placeholder="Buscar produto por nome ou código" value={buscaProd} onChange={(e) => setBuscaProd(e.target.value)} />
-              {carregandoCat && catalogo.length === 0 && <p className="suave">Carregando produtos…</p>}
-              {!carregandoCat && secoes.every((s) => s.itens.length === 0) && <p className="suave">{buscaProd.trim().length >= 2 ? 'Nenhum produto encontrado.' : 'Sem destaques nem compras recentes deste cliente: use a busca acima.'}</p>}
+              <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                <input className="entrada" style={{ flex: 1, minWidth: 220 }} placeholder="Buscar produto por nome, código ou EAN" value={buscaProd} onChange={(e) => setBuscaProd(e.target.value)} />
+                <label className="suave" style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }} title="Por padrão só aparece o que dá para vender: com preço de tabela e estoque para este cliente">
+                  <input type="checkbox" checked={mostrarIndisp} onChange={(e) => setMostrarIndisp(e.target.checked)} /> Mostrar também sem estoque ou sem preço
+                </label>
+              </div>
+
               {secoes.map((s) => (
                 <div key={s.titulo}>
                   <div className="secao-titulo">{s.titulo}</div>
-                  {s.itens.map((p) => {
-                    const ja = noPedido(p.cod_produto);
-                    return (
-                      <div key={p.cod_produto} className={`prod-card${ja ? ' no-pedido' : ''}${p.disponivel ? '' : ' indisponivel'}`}>
-                        <Foto cod={p.cod_produto} tamanho={64} />
-                        <div className="prod-info">
-                          <div className="prod-nome">{p.descricao}</div>
-                          <div className="suave">
-                            Cód. {p.cod_produto} · {p.preco_tabela ? `${moeda(p.preco_tabela)}/${p.unidade_texto}` : 'sem preço de tabela'}
-                            {p.estoque_cx != null ? ` · estoque ${Math.floor(p.estoque_cx).toLocaleString('pt-BR')} ${p.unidade_texto}` : ''}
-                          </div>
-                          <div className="prod-selos">
-                            {p.origem && ROTULO_ORIGEM[p.origem] && <span className="selo ok">{ROTULO_ORIGEM[p.origem]}</span>}
-                            {p.estoque_cx != null && p.estoque_cx < 1 && <span className="selo aviso">Sem estoque</span>}
-                            {!p.disponivel && <span className="selo erro">Indisponível para este cliente</span>}
-                          </div>
-                        </div>
-                        {p.disponivel && (
-                          <button className={`mais${ja ? ' verde' : ''}`} onClick={() => adicionar(p)} title="Adicionar ao pedido">
-                            <Plus size={20} strokeWidth={2.4} />
-                            {ja && <span className="mais-qtd">{ja.quantidade}</span>}
-                          </button>
-                        )}
-                      </div>
-                    );
-                  })}
+                  {s.itens.map((p) => <CartaoProduto key={p.cod_produto} p={p} ja={noPedido(p.cod_produto)} adicionar={adicionar} abrir={setPopup} />)}
                 </div>
               ))}
+
+              <div className="secao-titulo">
+                {buscaProd.trim() ? `Resultado da busca por "${buscaProd.trim()}"` : 'Todos os produtos disponíveis para este cliente'}
+                {!carregandoTodos && todos.length > 0 && <span className="suave"> · {todos.length}{proximoTodos != null ? '+' : ''}</span>}
+              </div>
+              {todos.map((p) => <CartaoProduto key={p.cod_produto} p={p} ja={noPedido(p.cod_produto)} adicionar={adicionar} abrir={setPopup} />)}
+              {carregandoTodos && <p className="suave">Carregando produtos…</p>}
+              {!carregandoTodos && todos.length === 0 && (
+                <p className="suave">
+                  {buscaProd.trim() ? 'Nenhum produto encontrado.' : 'Nenhum produto com preço de tabela e estoque para este cliente.'}
+                  {!mostrarIndisp && ' Marque "Mostrar também sem estoque ou sem preço" para ver o que está de fora.'}
+                </p>
+              )}
+              {!carregandoTodos && proximoTodos != null && <div style={{ marginTop: 8 }}><button className="btn" onClick={maisTodos}>Carregar mais produtos</button></div>}
             </div>
           )}
         </div>
@@ -483,7 +577,7 @@ export function NovoPedidoScreen() {
                 <div className="resumo-item" key={i.produto}>
                   <Foto cod={i.produto} tamanho={44} />
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div className="prod-nome" style={{ fontSize: 13 }}>{i.descricao}</div>
+                    <button className="link-prod prod-nome" style={{ fontSize: 13 }} onClick={() => setPopup(i.produto)} title="Ver os dados do produto">{i.descricao}</button>
                     {c?.erro ? <div className="erro-msg" style={{ margin: 0 }}>{c.erro}</div> : (
                       <div className="suave">
                         {c?.preco_final != null ? (
@@ -496,6 +590,12 @@ export function NovoPedidoScreen() {
                     )}
                     {tipo === 'venda' && (c?.desconto_auto ?? 0) > 0 && c?.origem_desconto === 'combo' && <div className="suave" style={{ color: 'var(--c-ok-texto)' }}>Combo: {c.desconto_auto}% automático</div>}
                     {tipo === 'venda' && c?.incentivo && (c.desconto_auto ?? 0) > 0 && c.origem_desconto !== 'combo' && <div className="suave" style={{ color: 'var(--c-ok-texto)' }}>Incentivo: {c.desconto_auto}% automático (a partir de {c.incentivo.qtd_minima} {i.unidade_texto})</div>}
+                    {tipo === 'venda' && c?.proxima_faixa && (
+                      <div className="suave" style={{ color: 'var(--c-aviso)', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <span>Faltam {qfmt(c.proxima_faixa.falta)} {i.unidade_texto} para {qfmt(c.proxima_faixa.desconto_pct)}% de desconto</span>
+                        <button className="link-prod" style={{ display: 'inline', color: 'var(--c-prim-texto)', fontWeight: 600 }} onClick={() => mudarQtd(i.produto, Math.ceil(c.proxima_faixa!.falta))} title="Soma ao pedido o que falta para chegar na faixa">+ adicionar {Math.ceil(c.proxima_faixa.falta)}</button>
+                      </div>
+                    )}
                     {tipo === 'venda' && c?.preco_final != null && (c.desconto_manual_max ?? 0) > 0 && (
                       <label className="suave" style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 2 }}>
                         Desconto extra
@@ -530,6 +630,29 @@ export function NovoPedidoScreen() {
             </div>
           )}
 
+          {tipo === 'venda' && cot?.combos && (cot.combos.aplicados.length > 0 || cot.combos.incompletos.length > 0) && (
+            <div style={{ marginTop: 8 }}>
+              {cot.combos.aplicados.map((a) => (
+                <div key={a.id} style={{ borderLeft: '4px solid var(--c-ok)', background: 'var(--c-ok-fundo)', borderRadius: 8, padding: '8px 12px', marginBottom: 8 }}>
+                  <div style={{ fontWeight: 700, color: 'var(--c-ok-texto)' }}>Combo aplicado: {a.nome}</div>
+                  <div className="suave" style={{ color: 'inherit' }}>
+                    {a.vezes > 1 ? `${a.vezes}x · ` : ''}
+                    {a.brinde ? `ganha ${qfmt(a.brinde.quantidade)} cx de ${a.brinde.descricao ?? a.brinde.produto}` : `${qfmt(a.desconto_pct ?? 0)}% de desconto nos itens do combo`}
+                  </div>
+                </div>
+              ))}
+              {cot.combos.incompletos.map((x) => (
+                <div key={x.id} style={{ borderLeft: '4px solid var(--c-aviso-borda)', background: 'var(--c-aviso-fundo)', borderRadius: 8, padding: '8px 12px', marginBottom: 8 }}>
+                  <div style={{ fontWeight: 700 }}>Quase lá: {x.nome}</div>
+                  <div className="suave" style={{ color: 'inherit' }}>
+                    Falta {x.faltas.map((ft) => ft.alvo_descricao ? `${qfmt(ft.falta)} cx de ${ft.alvo_descricao}` : `${qfmt(ft.falta)} cx ${ROTULO_ALVO[ft.alvo_tipo] ?? ''} ${ft.alvo_valor}`.replace('  ', ' ')).join(' e ')} para o cliente{' '}
+                    {x.brinde ? `ganhar ${qfmt(x.brinde.quantidade)} cx de ${x.brinde.descricao ?? x.brinde.produto}` : `ter ${qfmt(x.desconto_pct ?? 0)}% de desconto`}.
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
           {itens.length > 0 && (
             <>
               <div className="resumo-total"><span>{tipo === 'venda' ? 'Total estimado' : 'Valor de tabela (referência)'}</span><strong>{moeda(totalItens)}</strong></div>
@@ -551,6 +674,10 @@ export function NovoPedidoScreen() {
           )}
         </aside>
       </div>
+
+      {popup && vendedor && cliente && (
+        <ProdutoPopup vendedor={vendedor.cod_vendedor} cliente={cliente.cod_cliente} cod={popup} noPedido={numero(noPedido(popup)?.quantidade ?? '0')} aoAdicionar={adicionarSomando} aoFechar={() => setPopup(null)} />
+      )}
     </>
   );
 }

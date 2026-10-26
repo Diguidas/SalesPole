@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
-import { Settings, UsersRound, ListOrdered, House, PlusCircle, Activity, Users, MapPinCheck, SlidersHorizontal, CalendarDays, ChevronDown, Gift, LogOut, ChartColumnBig, Moon, Sun, Package, Percent, Star, Tag, Landmark, Boxes, ScrollText, Megaphone, FilePlus2, Clock, UserX } from 'lucide-react';
-import { ehHierarquia, tem, useAuth } from '../auth';
+import { Settings, UsersRound, ListOrdered, House, PlusCircle, Activity, Users, MapPinCheck, SlidersHorizontal, CalendarDays, ChevronDown, Gift, LogOut, ChartColumnBig, Moon, Sun, Package, Percent, Star, Tag, Landmark, Boxes, ScrollText, Megaphone, FilePlus2, Clock, UserX, CalendarCheck, Hourglass, Receipt } from 'lucide-react';
+import { ehHierarquia, ehVendedor, tem, useAuth } from '../auth';
 import { GavetasProvider } from '../gavetas';
 import { useTema } from '../tema';
 import logo from '../assets/salespole.png';
@@ -22,6 +22,9 @@ const MENU: Array<Tela | Modulo> = [
     icone: <Package size={16} strokeWidth={2} />,
     itens: [
       { para: '/pedidos', rotulo: 'Pedidos', icone: <ListOrdered size={16} strokeWidth={2} /> },
+      { para: '/hoje', rotulo: 'Hoje (por vendedor)', icone: <CalendarCheck size={16} strokeWidth={2} /> },
+      { para: '/carteira-parada', rotulo: 'Carteira parada', icone: <Hourglass size={16} strokeWidth={2} /> },
+      { para: '/titulos', rotulo: 'Títulos da carteira', icone: <Receipt size={16} strokeWidth={2} /> },
       { para: '/bonificacoes', rotulo: 'Bonificações (aprovação)', icone: <Gift size={16} strokeWidth={2} /> },
       { para: '/clientes', rotulo: 'Clientes', icone: <UsersRound size={16} strokeWidth={2} /> },
       { para: '/solicitacoes', rotulo: 'Solicitações de cliente', icone: <FilePlus2 size={16} strokeWidth={2} /> },
@@ -60,6 +63,18 @@ const MENU: Array<Tela | Modulo> = [
   },
 ];
 
+/** Menu do vendedor no computador: so o que ele usa no dia a dia, direto na barra. */
+const MENU_VENDEDOR: Tela[] = [
+  { tipo: 'tela', para: '/', rotulo: 'Hoje', icone: <CalendarCheck size={16} strokeWidth={2} /> },
+  { tipo: 'tela', para: '/pedidos', rotulo: 'Pedidos', icone: <ListOrdered size={16} strokeWidth={2} /> },
+  { tipo: 'tela', para: '/clientes', rotulo: 'Clientes', icone: <UsersRound size={16} strokeWidth={2} /> },
+  { tipo: 'tela', para: '/carteira-parada', rotulo: 'Carteira parada', icone: <Hourglass size={16} strokeWidth={2} /> },
+  { tipo: 'tela', para: '/titulos', rotulo: 'Títulos', icone: <Receipt size={16} strokeWidth={2} /> },
+  { tipo: 'tela', para: '/solicitacoes', rotulo: 'Solicitações', icone: <FilePlus2 size={16} strokeWidth={2} /> },
+  { tipo: 'tela', para: '/produtos', rotulo: 'Produtos', icone: <Boxes size={16} strokeWidth={2} /> },
+  { tipo: 'tela', para: '/bi', rotulo: 'BI', icone: <ChartColumnBig size={16} strokeWidth={2} /> },
+];
+
 /** Unico item do cadastro que supervisor/gerente podem ter (permissao "comunicados"). */
 const ITEM_COMUNICADOS = '/cadastros/avisos';
 
@@ -91,12 +106,13 @@ export function Shell() {
   }, []);
 
   const hierarquia = ehHierarquia(usuario?.papel);
+  const menu = ehVendedor(usuario?.papel) ? MENU_VENDEDOR : MENU;
   const visivel = (i: { para: string; soAdmin?: boolean }) => (!i.soAdmin || usuario?.papel === 'admin') && (!hierarquia || i.para !== ITEM_COMUNICADOS || tem(usuario, 'comunicados'));
   // supervisor/gerente: so o comercial; do cadastro, apenas os comunicados (se o admin liberar). Sistema fica escondido.
   const itensDoModulo = (m: Modulo) => (hierarquia && m.rotulo === 'Cadastros' ? m.itens.filter((i) => i.para === ITEM_COMUNICADOS && tem(usuario, 'comunicados')) : m.itens).filter(visivel);
   const moduloVisivel = (m: Tela | Modulo) => m.tipo === 'tela' ? !m.soAdmin || usuario?.papel === 'admin' : !(hierarquia && m.rotulo === 'Sistema') && itensDoModulo(m).length > 0;
   const nome = usuario?.nome || usuario?.email || '';
-  const rotuloPapel = { admin: 'Administrador', aprovador: 'Aprovador', consulta: 'Consulta', supervisor: 'Supervisor', gerente: 'Gerente', gerente_geral: 'Gerente geral' }[usuario?.papel ?? 'consulta'];
+  const rotuloPapel = { admin: 'Administrador', aprovador: 'Aprovador', consulta: 'Consulta', supervisor: 'Supervisor', gerente: 'Gerente', gerente_geral: 'Gerente geral', vendedor: 'Vendedor' }[usuario?.papel ?? 'consulta'];
 
   return (
     <GavetasProvider>
@@ -105,7 +121,7 @@ export function Shell() {
         <img className="topbar-logo" src={logo} alt="SalesPole" />
         <span className="topbar-nome">Painel</span>
         <nav className="topnav">
-          {MENU.filter(moduloVisivel).map((m) =>
+          {menu.filter(moduloVisivel).map((m) =>
             m.tipo === 'tela' ? (
               <NavLink key={m.para} to={m.para} end={m.para === '/'} className={({ isActive }) => `tab${isActive ? ' ativo' : ''}`}>
                 {m.icone}
@@ -138,7 +154,7 @@ export function Shell() {
           )}
         </nav>
         {tem(usuario, 'criar_pedido') && (
-          <Link to="/novo-pedido" className="btn-destaque" title="Criar um pedido em nome de um vendedor">
+          <Link to="/novo-pedido" className="btn-destaque" title={ehVendedor(usuario?.papel) ? 'Fazer um pedido' : 'Criar um pedido em nome de um vendedor'}>
             <PlusCircle size={16} strokeWidth={2.2} />
             <span>Novo pedido</span>
           </Link>

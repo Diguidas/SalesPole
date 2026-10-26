@@ -9,7 +9,7 @@ export interface Escopo {
 }
 
 /** Papeis que veem apenas a propria equipe (gerente geral ve tudo). */
-export const PAPEIS_COM_ESCOPO = ['supervisor', 'gerente'];
+export const PAPEIS_COM_ESCOPO = ['supervisor', 'gerente', 'vendedor'];
 
 const TTL_MS = 60_000;
 const cache = new Map<string, { em: number; escopo: Escopo }>();
@@ -28,6 +28,14 @@ export async function resolverEscopo(sb: SupabaseClient, papel: string, codSap: 
   if (!PAPEIS_COM_ESCOPO.includes(papel)) return null;
   const cod = codSap ? normCod(codSap) : '';
   if (!cod) return { vendedores: [], rotas: [] };
+
+  // vendedor: so a propria carteira (ele mesmo e a rota dele)
+  if (papel === 'vendedor') {
+    const { data, error } = await sb.from('vendedores').select('rota').eq('cod_vendedor', cod).maybeSingle();
+    if (error) throw error;
+    const rota = (data as { rota: string | null } | null)?.rota ?? null;
+    return { vendedores: [cod], rotas: rota ? [rota] : [] };
+  }
 
   const chave = `${papel}:${cod}`;
   const ac = cache.get(chave);

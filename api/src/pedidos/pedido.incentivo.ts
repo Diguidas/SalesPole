@@ -44,6 +44,11 @@ function vale(r: IncentivoRow, produto: string, ctx: ContextoIncentivo, cls?: Cl
   return alvoServeProduto(r, produto, cls) && escopoServe(r.escopo, r.escopo_valor, ctx);
 }
 
+/** Todas as faixas que servem ao produto (para o comprador do contexto), da menor para a maior quantidade minima. */
+export function faixasQueServem(rows: IncentivoRow[], produto: string, ctx: ContextoIncentivo, cls?: ClassificacaoSrv | null): IncentivoRow[] {
+  return rows.filter((r) => vale(r, produto, ctx, cls)).sort((a, b) => Number(a.qtd_minima) - Number(b.qtd_minima));
+}
+
 /** Regra que vale para o produto nessa quantidade: maior quantidade minima atingida; empate = escopo mais especifico, depois alvo mais especifico. */
 export function incentivoAplicavel(
   rows: IncentivoRow[],

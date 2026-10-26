@@ -83,14 +83,14 @@ export class SolicitacoesService implements OnModuleInit {
 
   /** Vendedores que quem cria pelo painel pode escolher (a propria equipe; admin e gerente geral, todos). */
   async vendedoresDoPainel(u: UsuarioPainel) {
-    this.exigirSupervisor(u);
+    this.exigirCadastro(u);
     const { data, error } = await this.sb.from('vendedores').select('cod_vendedor, nome, rota').not('rota', 'is', null).order('nome');
     if (error) throw error;
     return ((data ?? []) as Array<{ cod_vendedor: string; nome: string | null; rota: string }>).filter((v) => !u.escopo || u.escopo.vendedores.includes(normCod(v.cod_vendedor)));
   }
 
   private async vendedorDoPainel(u: UsuarioPainel, cod: unknown): Promise<{ cod_vendedor: string; rota: string | null }> {
-    this.exigirSupervisor(u);
+    this.exigirCadastro(u);
     const codigo = normCod(String(cod ?? ''));
     if (!/^\d{1,10}$/.test(codigo)) throw new UnprocessableEntityException('Escolha o vendedor');
     exigirVendedor(u.escopo, codigo);
@@ -184,6 +184,11 @@ export class SolicitacoesService implements OnModuleInit {
     if (e2) throw e2;
     const ven = (v ?? [])[0] as { nome: string | null; cod_vendedor: string } | undefined;
     return { rota, vendedor: ven?.nome ?? null, cod_vendedor: ven?.cod_vendedor ?? null };
+  }
+
+  /** Cadastro de cliente: quem cria pelo painel (supervisao) e o proprio vendedor, na propria carteira. */
+  private exigirCadastro(u: UsuarioPainel) {
+    if (!PAPEIS_SUPERVISOR.includes(u.papel) && u.papel !== 'vendedor') throw new ForbiddenException('Seu perfil nao cria esta solicitacao');
   }
 
   private exigirSupervisor(u: UsuarioPainel) {

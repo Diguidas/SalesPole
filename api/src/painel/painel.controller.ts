@@ -1,5 +1,5 @@
 import { Body, Controller, ForbiddenException, Get, Param, ParseUUIDPipe, Post, Query, Req, UseGuards } from '@nestjs/common';
-import { PainelGuard, Papeis, Permissoes, SoPapeis, UsuarioPainel } from './painel.guard';
+import { PainelGuard, Papeis, Permissoes, SoPapeis, UsuarioPainel, VendedorOk } from './painel.guard';
 import { PADROES, PERMISSOES } from './permissoes';
 import { IndicadoresService } from './indicadores.service';
 import { MonitorService } from './monitor.service';
@@ -29,6 +29,7 @@ export class PainelController {
     private readonly combos: CombosService,
   ) {}
 
+  @VendedorOk()
   @Get('eu')
   eu(@Req() req: { usuarioPainel: UsuarioPainel }) {
     const { escopo: _escopo, ...u } = req.usuarioPainel; // o escopo (listas de vendedores/rotas) fica so no servidor
@@ -53,6 +54,7 @@ export class PainelController {
   }
 
   // ---- consulta geral: pedidos e clientes (todos veem; cancelar pedido so admin e aprovador) ----
+  @VendedorOk()
   @Get('pedidos')
   listarPedidos(
     @Req() req: { usuarioPainel: UsuarioPainel },
@@ -62,27 +64,32 @@ export class PainelController {
     return this.consulta.listarPedidos(req.usuarioPainel.escopo, { origem, ini, fim, vendedor, busca, status, antecipado, pendentes, pagina });
   }
 
+  @VendedorOk()
   @Get('pedidos/:ordem')
   pedidoSap(@Req() req: { usuarioPainel: UsuarioPainel }, @Param('ordem') ordem: string) {
     return this.consulta.pedido(ordem, req.usuarioPainel.escopo);
   }
 
+  @VendedorOk()
   @Post('pedidos/:ordem/atualizar')
   atualizarPedido(@Req() req: { usuarioPainel: UsuarioPainel }, @Param('ordem') ordem: string) {
     return this.consulta.atualizarPedido(req.usuarioPainel.escopo, ordem);
   }
 
+  @VendedorOk()
   @Post('pedidos/:ordem/cancelar')
   @Permissoes('cancelar_pedido')
   cancelarPedido(@Req() req: { usuarioPainel: UsuarioPainel }, @Param('ordem') ordem: string, @Body() corpo: { motivo?: string }) {
     return this.consulta.cancelarPedido(req.usuarioPainel, ordem, corpo?.motivo);
   }
 
+  @VendedorOk()
   @Get('pedido-app/:id/pdf-dados')
   pedidoAppPdf(@Req() req: { usuarioPainel: UsuarioPainel }, @Param('id') id: string) {
     return this.consulta.pedidoAppParaPdf(id, req.usuarioPainel.escopo);
   }
 
+  @VendedorOk()
   @Get('clientes')
   listarClientes(
     @Req() req: { usuarioPainel: UsuarioPainel },
@@ -97,48 +104,77 @@ export class PainelController {
     return this.consulta.filtrosClientes();
   }
 
+  @VendedorOk()
   @Get('clientes/:cod')
   cliente(@Req() req: { usuarioPainel: UsuarioPainel }, @Param('cod') cod: string) {
     return this.consulta.cliente(cod, req.usuarioPainel.escopo);
   }
 
   // ---- pedido em nome do vendedor (admin e aprovador) ----
+  @VendedorOk()
   @Get('pedido-novo/vendedores')
   @Permissoes('criar_pedido')
   vendedoresParaPedido(@Req() req: { usuarioPainel: UsuarioPainel }) {
     return this.pedidoPainel.vendedores(req.usuarioPainel.escopo);
   }
 
+  @VendedorOk()
   @Get('pedido-novo/clientes')
   @Permissoes('criar_pedido')
   clientesParaPedido(@Req() req: { usuarioPainel: UsuarioPainel }, @Query('vendedor') vendedor = '', @Query('q') q = '') {
     return this.pedidoPainel.clientes(vendedor, q, req.usuarioPainel.escopo);
   }
 
+  @VendedorOk()
   @Get('pedido-novo/produtos')
   @Permissoes('criar_pedido')
   produtosParaPedido(@Query('cliente') cliente = '', @Query('q') q = '') {
     return this.catalogo.produtos(cliente, q);
   }
 
+  @VendedorOk()
+  @Get('pedido-novo/catalogo')
+  @Permissoes('criar_pedido')
+  catalogoParaPedido(@Req() req: { usuarioPainel: UsuarioPainel }, @Query('cliente') cliente = '', @Query('q') q = '', @Query('inicio') inicio = '0', @Query('todos') todos = '') {
+    return this.catalogo.catalogo(cliente, q, inicio, todos === '1', req.usuarioPainel.escopo);
+  }
+
+  @VendedorOk()
+  @Get('pedido-novo/produto')
+  @Permissoes('criar_pedido')
+  produtoParaPedido(@Req() req: { usuarioPainel: UsuarioPainel }, @Query('vendedor') vendedor = '', @Query('cliente') cliente = '', @Query('produto') produto = '') {
+    return this.catalogo.produtoDetalhe(vendedor, cliente, produto, req.usuarioPainel.escopo);
+  }
+
+  @VendedorOk()
   @Get('pedido-novo/sugestoes')
   @Permissoes('criar_pedido')
   sugestoesParaPedido(@Req() req: { usuarioPainel: UsuarioPainel }, @Query('vendedor') vendedor = '', @Query('cliente') cliente = '') {
     return this.catalogo.sugestoes(vendedor, cliente, req.usuarioPainel.escopo);
   }
 
+  @VendedorOk()
+  @Get('pedido-novo/duplicar')
+  @Permissoes('criar_pedido')
+  duplicarPedido(@Req() req: { usuarioPainel: UsuarioPainel }, @Query('vendedor') vendedor = '', @Query('cliente') cliente = '', @Query('ordem') ordem = '') {
+    return this.catalogo.duplicar(vendedor, cliente, ordem, req.usuarioPainel.escopo);
+  }
+
+  @VendedorOk()
   @Post('pedido-novo/cotar')
   @Permissoes('criar_pedido')
   cotarPedido(@Req() req: { usuarioPainel: UsuarioPainel }, @Body() corpo: { vendedor?: string; cliente?: string; itens?: unknown; tipo?: string }) {
     return this.catalogo.cotar(String(corpo?.vendedor ?? ''), String(corpo?.cliente ?? ''), corpo?.itens, req.usuarioPainel.escopo, corpo?.tipo === 'bonificacao' ? 'bonificacao' : 'venda');
   }
 
+  @VendedorOk()
   @Post('pedido-novo/carteira')
   @Permissoes('criar_pedido')
   carregarCarteira(@Req() req: { usuarioPainel: UsuarioPainel }, @Body() corpo: { vendedor?: string }) {
     return this.pedidoPainel.carregarCarteira(String(corpo?.vendedor ?? ''), req.usuarioPainel.escopo);
   }
 
+  @VendedorOk()
   @Post('pedidos')
   @Permissoes('criar_pedido')
   criarPedido(@Req() req: { usuarioPainel: UsuarioPainel }, @Body() corpo: Record<string, unknown>) {
@@ -298,11 +334,13 @@ export class PainelController {
   }
 
   // ---- produtos e listas de preco (somente leitura) ----
+  @VendedorOk()
   @Get('catalogo-produtos')
   listarProdutos(@Query('busca') busca?: string, @Query('tipo') tipo?: string, @Query('situacao') situacao?: string, @Query('pagina') pagina?: string) {
     return this.produtosPainel.listarProdutos({ busca, tipo, situacao, pagina });
   }
 
+  @VendedorOk()
   @Get('catalogo-produtos/:cod')
   produtoDetalhe(@Param('cod') cod: string) {
     return this.produtosPainel.produto(cod);
@@ -329,6 +367,7 @@ export class PainelController {
   }
 
   // ---- cadastros: todos veem, so admin altera ----
+  @VendedorOk()
   @Get('produtos')
   produtos(@Query('q') q = '') {
     return this.painel.buscarProdutos(q);

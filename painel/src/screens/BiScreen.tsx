@@ -14,9 +14,9 @@ export function BiScreen() {
   const [atual, setAtual] = useState<string | null>(null);
 
   useEffect(() => {
-    api<Painel[]>('/painel/cadastros/bi')
+    api<Painel[]>(usuario?.papel === 'vendedor' ? '/meu/bi' : '/painel/cadastros/bi')
       .then((r) => {
-        const visiveis = r.filter((p) => p.ativo && p.onde !== 'app');
+        const visiveis = r.filter((p) => p.ativo !== false && p.onde !== 'app');
         setLista(visiveis);
         setAtual(visiveis[0]?.id ?? null);
       })

@@ -43,7 +43,8 @@ class Q {
   in(c, arr) { this.f.push([c, 'in', arr]); return this; }
   filter(c, o, v) { this.f.push([c, o, v]); return this; }
   limit(n) { this.lim = n; return this; }
-  order(c, o) { this.ord = [c, o && o.ascending === false ? 'desc' : 'asc']; return this; }
+  order(c, o) { this.ord = [c, o && o.ascending === false ? 'desc' : 'asc']; (this.ords = this.ords || []).push(this.ord); return this; }
+  range(a, b) { this.lim = b - a + 1; this.off = a; return this; }
   maybeSingle() { this.single = true; return this.run(); }
   upsert(o, opts) { this.op = 'upsert'; this.obj = o; this.opts = opts || {}; return this; }
   update(o) { this.op = 'update'; this.obj = o; return this; }
@@ -67,8 +68,9 @@ class Q {
       const params = [];
       if (this.op === 'select') {
         let sql = `select ${this.cols} from ${this.table}${this.where(params)}`;
-        if (this.ord) sql += ` order by ${this.ord[0]} ${this.ord[1]}`;
+        if (this.ords) sql += ` order by ${this.ords.map((x) => `${x[0]} ${x[1]}`).join(', ')}`;
         if (this.lim) sql += ` limit ${this.lim}`;
+        if (this.off) sql += ` offset ${this.off}`;
         const rows = (await this.db.query(sql, params)).rows.map(fixRow);
         return { data: this.single ? rows[0] ?? null : rows, error: null };
       }
@@ -1770,6 +1772,343 @@ const t = async (nome, fn) => {
     assert.equal(c.desconto_pct, 5);
     await rej(cat.sugestoes('100409', '9999999'), 404);
     await rej(cat.sugestoes('100409', '0'), 422);
+  });
+
+  // ---------------- vendedor no painel (computador): papel, escopo, Hoje, carteira parada, titulos, visita ----------------
+  const { MeuService } = require(path.join(API, 'painel/meu.service.js'));
+  const { PainelGuard } = require(path.join(API, 'painel/painel.guard.js'));
+  const { resolverEscopo } = require(path.join(API, 'painel/escopo.js'));
+  const { MeuController } = require(path.join(API, 'painel/meu.controller.js'));
+  const { EquipeController } = require(path.join(API, 'painel/equipe.controller.js'));
+  const { PainelController } = require(path.join(API, 'painel/painel.controller.js'));
+  const { Reflector } = require('@nestjs/core');
+  const meu = new MeuService(fakeSb(db));
+  const UV = { email: 'vend@pole.com', nome: 'Vend', papel: 'vendedor', cod_sap: '310001', permissoes: ['criar_pedido'], escopo: { vendedores: ['310001'], rotas: ['RM'] } };
+  const UA = { email: 'admin@pole.com', nome: 'Admin', papel: 'admin', cod_sap: null, permissoes: [], escopo: null };
+  const hojeSp = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' });
+  const diaHoje = () => { const d = new Date(`${hojeSp()}T12:00:00-03:00`).getUTCDay(); return d === 0 ? 7 : d; };
+
+  await t('89. vendedor no painel: escopo = ele mesmo e a rota dele; sem codigo ou sem rota nao ve nada de ninguem', async () => {
+    await db.exec(`
+      insert into vendedores(cod_vendedor, nome, rota) values ('310001', 'Vend Painel', 'RM'), ('310002', 'Outro Vend', 'RN') on conflict (cod_vendedor) do update set rota = excluded.rota, nome = excluded.nome;
+      delete from rota_clientes where rota in ('RM', 'RN');
+      insert into clientes(cod_cliente, nome_fantasia, bloqueado, pagamento_antecipado, limite_disponivel, endereco, areas) values
+        ('9700001', 'Mercado Um', false, false, 5000, '{"cidade":"Recife","uf":"PE"}', '[{"escritorio":{"codigo":"E1"},"canal":{"codigo":"C1"}}]'),
+        ('9700002', 'Padaria Dois', false, false, 100, '{"cidade":"Olinda","uf":"PE"}', '[{"escritorio":{"codigo":"E1"},"canal":{"codigo":"C2"}}]'),
+        ('9700003', 'Bar Tres', true, false, 0, '{"cidade":"Recife","uf":"PE"}', '[]'),
+        ('9700099', 'De Outro', false, false, 1, '{}', '[]')
+      on conflict (cod_cliente) do update set nome_fantasia = excluded.nome_fantasia, bloqueado = excluded.bloqueado, areas = excluded.areas, endereco = excluded.endereco, limite_disponivel = excluded.limite_disponivel;
+      insert into rota_clientes(rota, cod_cliente, dia_semana, sequencia) values ('RM','9700001',${diaHoje()},1), ('RM','9700002',${diaHoje()},2), ('RM','9700003',${diaHoje()},3), ('RM','9700001',7,1), ('RN','9700099',${diaHoje()},1);
+    `);
+    const sb = fakeSb(db);
+    assert.deepEqual(await resolverEscopo(sb, 'vendedor', '310001'), { vendedores: ['310001'], rotas: ['RM'] });
+    assert.deepEqual(await resolverEscopo(sb, 'vendedor', '0000310001'), { vendedores: ['310001'], rotas: ['RM'] }); // zeros a esquerda
+    assert.deepEqual(await resolverEscopo(sb, 'vendedor', null), { vendedores: [], rotas: [] });
+    assert.deepEqual(await resolverEscopo(sb, 'vendedor', '999999'), { vendedores: ['999999'], rotas: [] }); // sem cadastro: nenhuma rota
+    assert.equal(await resolverEscopo(sb, 'admin', null), null);
+  });
+
+  await t('90. vendedor so entra nas rotas liberadas para ele (guard); gestao continua barrada', async () => {
+    const reflector = new Reflector();
+    const sbAuth = { ...fakeSb(db), auth: { getUser: async (tk) => ({ data: { user: { email: tk } }, error: null }) } };
+    await db.exec(`insert into usuarios_painel(email, nome, papel, cod_sap) values ('vend@pole.com', 'Vend', 'vendedor', '310001') on conflict (email) do update set papel = 'vendedor', cod_sap = '310001', ativo = true`);
+    const guard = new PainelGuard(sbAuth, reflector);
+    const chamar = async (ctrl, metodo, email = 'vend@pole.com') => {
+      const req = { headers: { authorization: `Bearer ${email}` } };
+      const ctx = { switchToHttp: () => ({ getRequest: () => req }), getHandler: () => ctrl.prototype[metodo], getClass: () => ctrl };
+      await guard.canActivate(ctx);
+      return req.usuarioPainel;
+    };
+    const u = await chamar(MeuController, 'hoje');
+    assert.equal(u.papel, 'vendedor');
+    assert.deepEqual(u.escopo, { vendedores: ['310001'], rotas: ['RM'] });
+    assert.deepEqual([...u.permissoes].sort(), ['cancelar_pedido', 'criar_pedido']);
+    await chamar(PainelController, 'listarPedidos');   // pedidos (escopo da propria carteira)
+    await chamar(PainelController, 'duplicarPedido');
+    const barrado = (ctrl, metodo) => assert.rejects(chamar(ctrl, metodo), (e) => { assert.equal(e.getStatus(), 403); return true; });
+    await barrado(PainelController, 'bonificacoes');   // aprovacao e da gestao
+    await barrado(PainelController, 'listarVendedores');
+    await barrado(EquipeController, 'hoje');           // modo equipe
+    await chamar(EquipeController, 'hoje', 'admin@pole.com'); // admin segue entrando em tudo
+  });
+
+  await t('91. Hoje: roteiro do dia da propria carteira, com situacao de cada cliente, vendas do mes e entregas', async () => {
+    await db.exec(`
+      delete from pedido_itens_sap where ordem like 'MEU%'; delete from pedidos_sap where ordem like 'MEU%'; delete from titulos where cod_cliente in ('9700001', '9700002', '9700003'); delete from remessas where ordem like 'MEU%'; delete from visitas where cod_cliente in ('9700001', '9700002');
+      insert into pedidos_sap(ordem, cod_cliente, dt_criacao, valor, status) values
+        ('MEU1', '9700001', current_date, 1000, 'Faturado'), ('MEU2', '9700001', current_date - 40, 500, 'Faturado'),
+        ('MEU3', '9700002', current_date - 20, 300, 'Faturado'), ('MEU4', '9700002', current_date - 2, 9999, 'Recusado');
+      insert into titulos(cod_cliente, nfe, parcela, status, valor, vencimento) values
+        ('9700002', 'N1', '1', 'Atrasado', 250, current_date - 10), ('9700002', 'N2', '1', 'Em aberto', 100, current_date + 5), ('9700001', 'N3', '1', 'Compensado', 50, current_date - 30);
+      insert into remessas(ordem, item, data_remessa, cod_cliente, quantidade_pedida, quantidade_confirmada) values
+        ('MEU1', '10', current_date, '9700001', 10, 10), ('MEU1', '20', current_date, '9700001', 10, 6);
+    `);
+    const h = await meu.hoje(UV);
+    assert.equal(h.vendedor.cod_vendedor, '310001');
+    assert.equal(h.eh_hoje, true);
+    assert.deepEqual(h.roteiro.map((c) => [c.cod_cliente, c.sequencia]), [['9700001', 1], ['9700002', 2], ['9700003', 3]]); // so a rota RM, na ordem do roteiro
+    const [c1, c2, c3] = h.roteiro;
+    assert.equal(c1.comprou_hoje, true);
+    assert.equal(c1.dias_sem_comprar, 0);
+    assert.equal(c2.vencido, 250);
+    assert.equal(c2.dias_sem_comprar, 20); // o pedido recusado nao conta como compra
+    assert.equal(c3.bloqueado, true);
+    assert.equal(h.resumo.planejadas, 3);
+    assert.equal(h.resumo.com_vencido, 1);
+    assert.equal(h.resumo.bloqueados, 1);
+    assert.equal(h.vendas_mes.mes, hojeSp().slice(0, 7));
+    assert.deepEqual(h.entregas.map((e) => [e.cod_cliente, e.ordens, e.itens, e.com_corte]), [['9700001', 1, 2, true]]); // 6 confirmados de 10 pedidos
+    const dom = await meu.hoje(UV, undefined, '7');
+    assert.deepEqual(dom.roteiro.map((c) => c.cod_cliente), ['9700001']);
+    await rej(meu.hoje(UV, undefined, '9'), 422);
+  });
+
+  await t('92. quem nao e vendedor precisa escolher um vendedor do escopo; o vendedor nao consegue ver a carteira de outro', async () => {
+    await rej(meu.hoje(UA), 422, /Escolha o vendedor/);
+    const h = await meu.hoje(UA, '310001');
+    assert.equal(h.vendedor.cod_vendedor, '310001');
+    // o vendedor ignora o parametro: sempre a propria carteira
+    const mesmo = await meu.hoje(UV, '310002');
+    assert.equal(mesmo.vendedor.cod_vendedor, '310001');
+    // supervisor so ve quem esta no escopo dele
+    const sup = { ...UA, papel: 'supervisor', escopo: { vendedores: ['310002'], rotas: ['RN'] } };
+    await rej(meu.hoje(sup, '310001'), 403);
+    assert.equal((await meu.hoje(sup, '310002')).roteiro.length, 1);
+    // vendedor sem codigo SAP no cadastro de acesso
+    await rej(meu.hoje({ ...UV, cod_sap: null, escopo: { vendedores: [], rotas: [] } }), 422, /codigo SAP/);
+  });
+
+  await t('93. carteira parada e titulos da carteira (so os dos clientes dela)', async () => {
+    await db.exec(`insert into titulos(cod_cliente, nfe, parcela, status, valor, vencimento) values ('9700099', 'X1', '1', 'Atrasado', 777, current_date - 99) on conflict do nothing`);
+    const p30 = await meu.carteiraParada(UV, undefined, '30');
+    assert.deepEqual(p30.itens.map((c) => c.cod_cliente), ['9700003']); // 9700001 comprou hoje, 9700002 ha 20 dias; o bloqueado nunca comprou
+    assert.equal(p30.nunca_compraram, 1);
+    const p15 = await meu.carteiraParada(UV, undefined, '15');
+    assert.deepEqual(p15.itens.map((c) => c.cod_cliente), ['9700003', '9700002']); // nunca comprou primeiro, depois o mais antigo
+    assert.equal(p15.itens[1].dias, 20);
+    assert.equal(p15.itens[1].vencido, 250);
+    assert.deepEqual(p15.itens[1].dias_visita, [diaHoje()]);
+    await rej(meu.carteiraParada(UV, undefined, '45'), 422);
+
+    const tit = await meu.titulos(UV);
+    assert.deepEqual(tit.itens.map((x) => x.nfe), ['N1', 'N2']); // abertos e atrasados; nada do cliente de outra rota
+    assert.equal(tit.valor_atrasado, 250);
+    assert.equal(tit.valor_em_aberto, 100);
+    assert.equal(tit.itens[0].dias_atraso, 10);
+    assert.deepEqual((await meu.titulos(UV, undefined, 'atrasados')).itens.map((x) => x.nfe), ['N1']);
+    assert.deepEqual((await meu.titulos(UV, undefined, 'todos')).itens.map((x) => x.nfe).sort(), ['N1', 'N2', 'N3']);
+  });
+
+  await t('94. visita pelo computador: inicia sem GPS e sem foto, responde as perguntas e conclui; so na propria carteira', async () => {
+    await db.exec(`
+      delete from visita_perguntas where texto like 'MEU%';
+      insert into visita_perguntas(id, texto, tipo, obrigatoria, escopo, escopo_valor) values
+        ('aaaaaaaa-0000-4000-8000-000000000001', 'MEU geral obrigatoria', 'texto', true, 'geral', null),
+        ('aaaaaaaa-0000-4000-8000-000000000002', 'MEU so canal C2', 'texto', false, 'canal', 'C2'),
+        ('aaaaaaaa-0000-4000-8000-000000000003', 'MEU de outro vendedor', 'texto', true, 'vendedor', '310002');
+    `);
+    const p1 = await meu.perguntas(UV, '9700001');
+    assert.deepEqual(p1.map((p) => p.texto), ['MEU geral obrigatoria']);
+    assert.deepEqual((await meu.perguntas(UV, '9700002')).map((p) => p.texto).sort(), ['MEU geral obrigatoria', 'MEU so canal C2']);
+    await rej(meu.perguntas(UV, '9700099'), 403); // cliente de outra carteira
+
+    const v = await meu.iniciarVisita(UV, { cod_cliente: '9700001' });
+    assert.equal(v.status, 'em_andamento');
+    assert.equal((await meu.iniciarVisita(UV, { cod_cliente: '9700001' })).id, v.id); // idempotente no dia
+    await rej(meu.iniciarVisita(UV, { cod_cliente: '9700099' }), 403);
+    const row = (await db.query(`select origem, checkin_lat, validacao, sem_referencia from visitas where id = $1`, [v.id])).rows[0];
+    assert.deepEqual([row.origem, row.checkin_lat, row.validacao, row.sem_referencia], ['painel', null, 'validada', false]);
+
+    await rej(meu.concluirVisita(UV, v.id, { resultado: 'nao_vendeu', motivo_nao_venda: 'ab' }), 422); // motivo curto
+    await rej(meu.concluirVisita(UV, v.id, { resultado: 'vendeu' }), 422, /obrigatorias/); // falta a pergunta obrigatoria
+    const r = await meu.concluirVisita(UV, v.id, { resultado: 'nao_vendeu', motivo_nao_venda: 'Estoque cheio', respostas: [{ pergunta_id: 'aaaaaaaa-0000-4000-8000-000000000001', pergunta: 'MEU geral obrigatoria', resposta: 'ok' }] });
+    assert.equal(r.status, 'concluida');
+    const fim = (await db.query(`select status, resultado, motivo_nao_venda, respostas from visitas where id = $1`, [v.id])).rows[0];
+    assert.deepEqual([fim.status, fim.resultado, fim.motivo_nao_venda, fim.respostas.length], ['concluida', 'nao_vendeu', 'Estoque cheio', 1]);
+    await rej(meu.concluirVisita(UV, v.id, { resultado: 'vendeu' }), 409); // ja concluida
+    // outro vendedor nao conclui a visita de quem nao e dele
+    const outro = { ...UV, cod_sap: '310002', escopo: { vendedores: ['310002'], rotas: ['RN'] } };
+    const v2 = await meu.iniciarVisita(UV, { cod_cliente: '9700002' });
+    await rej(meu.concluirVisita(outro, v2.id, { resultado: 'vendeu' }), 403);
+    // o Hoje reflete as duas visitas
+    const h = await meu.hoje(UV);
+    assert.deepEqual(h.roteiro.map((c) => [c.cod_cliente, c.visita_status, c.visita_resultado]), [['9700001', 'concluida', 'nao_vendeu'], ['9700002', 'em_andamento', null], ['9700003', null, null]]);
+    assert.deepEqual([h.resumo.visitadas, h.resumo.em_andamento], [1, 1]);
+  });
+
+  await t('95. avisos da carteira: geral, do vendedor, e escritorio/canal onde ele tem cliente; fora da vigencia nao aparece', async () => {
+    await db.exec(`
+      delete from avisos where titulo like 'MEU%';
+      insert into avisos(titulo, mensagem, nivel, escopo, escopo_valor, vigencia_ini, vigencia_fim) values
+        ('MEU geral', 'mensagem geral', 'info', 'geral', null, null, null),
+        ('MEU urgente dele', 'mensagem urgente', 'urgente', 'vendedor', '310001', null, null),
+        ('MEU de outro', 'mensagem outro', 'info', 'vendedor', '310002', null, null),
+        ('MEU escritorio dele', 'mensagem esc', 'importante', 'escritorio', 'E1', null, null),
+        ('MEU escritorio alheio', 'mensagem esc2', 'info', 'escritorio', 'E9', null, null),
+        ('MEU canal dele', 'mensagem canal', 'info', 'canal', 'C2', null, null),
+        ('MEU vencido', 'mensagem velha', 'info', 'geral', null, current_date - 10, current_date - 1);
+    `);
+    const a = (await meu.avisos(UV)).filter((x) => x.titulo.startsWith('MEU'));
+    assert.deepEqual(a.map((x) => x.titulo).slice(0, 2), ['MEU urgente dele', 'MEU escritorio dele']); // urgente, depois importante
+    assert.deepEqual(a.map((x) => x.titulo).sort(), ['MEU canal dele', 'MEU escritorio dele', 'MEU geral', 'MEU urgente dele']);
+  });
+
+  await t('96. duplicar pedido: itens em caixa de volta ao carrinho; recusados e outras unidades ficam de fora com o motivo', async () => {
+    await db.exec(`
+      delete from pedido_itens_sap where ordem = '5900001'; delete from pedidos_sap where ordem = '5900001';
+      insert into pedidos_sap(ordem, cod_cliente, dt_criacao, valor, status) values ('5900001', '9500001', current_date - 5, 100, 'Faturado');
+      insert into pedido_itens_sap(ordem, item, cod_produto, quantidade, unidade_venda, denominacao, recusa) values
+        ('5900001', '10', 'CAT1', 3, 'CX', 'Queijo Catalogo', null), ('5900001', '20', 'CAT2', 2, 'CX', 'Presunto Catalogo', 'Sem estoque'), ('5900001', '30', 'CAT3', 7, 'KG', 'Por quilo', null);
+    `);
+    const d = await cat.duplicar('100409', '9500001', '5900001');
+    assert.deepEqual(d.itens.map((i) => [i.produto.cod_produto, i.quantidade]), [['CAT1', 3]]);
+    assert.deepEqual(d.ignorados.map((i) => i.cod_produto).sort(), ['CAT2', 'CAT3']);
+    assert.match(d.ignorados.find((i) => i.cod_produto === 'CAT2').motivo, /recusado/);
+    await rej(cat.duplicar('100409', '9500002', '5900001'), 404); // pedido de outro cliente
+    await rej(cat.duplicar('100409', '9500001', 'abc'), 422);
+    await rej(cat.duplicar('310002', '9500001', '5900001', { vendedores: ['310001'], rotas: ['RM'] }), 403); // fora do escopo
+  });
+
+  await t('97. quem ja usa o app como vendedor entra no painel como vendedor, sem cadastro a parte; cadastro do painel sempre manda', async () => {
+    const sbAuth = { ...fakeSb(db), auth: { getUser: async (tk) => ({ data: { user: { email: tk } }, error: null }) } };
+    const guard = new PainelGuard(sbAuth, new Reflector());
+    const entrar = async (email) => {
+      const req = { headers: { authorization: `Bearer ${email}` } };
+      await guard.canActivate({ switchToHttp: () => ({ getRequest: () => req }), getHandler: () => MeuController.prototype.hoje, getClass: () => MeuController });
+      return req.usuarioPainel;
+    };
+    const barrado = (email) => assert.rejects(entrar(email), (e) => { assert.equal(e.getStatus(), 403); assert.match(e.message, /sem acesso ao painel/); return true; });
+    await db.exec(`
+      delete from usuarios_painel where email in ('soapp@pole.com', 'desligado@pole.com', 'painelinativo@pole.com');
+      insert into usuarios_vendedor(email, cod_vendedor, ativo) values ('soapp@pole.com', '310001', true), ('desligado@pole.com', '310001', false), ('painelinativo@pole.com', '310001', true)
+        on conflict (email) do update set cod_vendedor = excluded.cod_vendedor, ativo = excluded.ativo;
+      insert into usuarios_painel(email, nome, papel, ativo) values ('painelinativo@pole.com', 'Desligado no painel', 'consulta', false);
+    `);
+    const u = await entrar('soapp@pole.com');
+    assert.deepEqual([u.papel, u.cod_sap, u.nome, u.escopo], ['vendedor', '310001', 'Vend Painel', { vendedores: ['310001'], rotas: ['RM'] }]);
+    assert.deepEqual([...u.permissoes].sort(), ['cancelar_pedido', 'criar_pedido']);
+    assert.equal((await meu.hoje(u)).vendedor.cod_vendedor, '310001'); // e o Hoje funciona com esse usuario
+    await barrado('desligado@pole.com');     // vinculo do app desativado
+    await barrado('painelinativo@pole.com'); // acesso desligado no painel nao volta pela porta do vendedor
+    await barrado('ninguem@pole.com');       // nem vendedor nem painel
+  });
+
+  await t('98. catalogo completo do cliente: so o que da para vender (preco + estoque), em paginas; "mostrar tudo" traz o resto marcado', async () => {
+    const vendaveis = await cat.catalogo('9500001');
+    assert.deepEqual(vendaveis.itens.map((x) => x.cod_produto), ['CAT1']); // CAT2 tem preco mas o centro nao tem estoque dele; CAT3 e revenda (sem area)
+    assert.equal(vendaveis.proximo, null);
+    assert.deepEqual((await cat.catalogo('9500001', 'queijo')).itens.map((x) => x.cod_produto), ['CAT1']);
+    assert.deepEqual((await cat.catalogo('9500001', 'CAT2')).itens, []); // sem estoque: escondido, como no app
+    const tudo = await cat.catalogo('9500001', '', 0, true, null, 500);
+    const por = Object.fromEntries(tudo.itens.map((x) => [x.cod_produto, x]));
+    assert.equal(por.CAT1.sem_estoque, false);
+    assert.equal(por.CAT2.sem_estoque, true);
+    assert.equal(por.CAT3.disponivel, false);
+    // ordem de nome: Presunto Catalogo, Produto de Revenda, Queijo Catalogo
+    const nomes = tudo.itens.map((x) => x.descricao);
+    assert.deepEqual(nomes, [...nomes].sort((a, b) => a.localeCompare(b, 'en')));
+    // paginacao: o cursor continua de onde parou e, juntando as paginas, sai a mesma lista
+    const juntas = [];
+    let cursor = 0;
+    for (let n = 0; n < 50; n++) {
+      const r = await cat.catalogo('9500001', '', cursor, true, null, 3);
+      juntas.push(...r.itens.map((x) => x.cod_produto));
+      if (r.proximo == null) break;
+      assert.equal(r.itens.length, 3);
+      cursor = r.proximo;
+    }
+    assert.deepEqual(juntas, tudo.itens.map((x) => x.cod_produto));
+    // vendedor so ve o catalogo de cliente da propria carteira
+    await rej(cat.catalogo('9500001', '', 0, false, { vendedores: ['310001'], rotas: ['RM'] }), 403);
+    await rej(cat.catalogo('0'), 422);
+  });
+
+  await t('99. detalhe do produto para o cliente: preco, desconto maximo, faixas do incentivo, combos, historico de compra e ficha', async () => {
+    await db.exec(`
+      delete from pedido_itens_sap where ordem in (select ordem from pedidos_sap where cod_cliente = '9500001');
+      delete from pedidos_sap where cod_cliente = '9500001';
+      insert into pedidos_sap(ordem, cod_cliente, dt_criacao, valor, status) values
+        ('HP1', '9500001', current_date - 40, 400, 'Faturado'), ('HP2', '9500001', current_date - 10, 600, 'Faturado'), ('HP3', '9500001', current_date - 5, 100, 'Recusado');
+      insert into pedido_itens_sap(ordem, item, cod_produto, quantidade, unidade_venda, recusa) values
+        ('HP1', '10', 'CAT1', 4, 'KI', null), ('HP2', '10', 'CAT1', 6, 'KI', null), ('HP2', '20', 'CAT2', 9, 'KI', null), ('HP3', '10', 'CAT1', 99, 'KI', null);
+    `);
+    const d = await cat.produtoDetalhe('100409', '9500001', 'CAT1');
+    assert.deepEqual([d.produto.preco_tabela, d.produto.desconto_max, d.produto.estoque_cx, d.produto.unidade_texto], [100, 5, 50, 'CX']);
+    assert.deepEqual(d.faixas, [{ qtd_minima: 10, desconto_pct: 3, extra_max_pct: 2, escopo: 'geral', alvo: 'produto' }]);
+    assert.ok(d.combos.some((c) => c.nome === 'Combo Sug' && c.desconto_pct === 5 && c.condicao.some((x) => x.alvo_valor === 'CAT1')));
+    // historico: so pedidos validos deste produto (o recusado e o item de outro produto ficam de fora)
+    assert.deepEqual([d.historico.pedidos, d.historico.quantidade_total, d.historico.ultima_compra, d.historico.intervalo_dias], [2, 10, new Date(Date.now() - 10 * 86_400_000).toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' }), 30]);
+    assert.deepEqual(d.historico.ultimas.map((x) => [x.ordem, x.quantidade]), [['HP2', 6], ['HP1', 4]]);
+    // produto sem historico nem faixa
+    const c2 = await cat.produtoDetalhe('100409', '9500001', 'CAT2');
+    assert.deepEqual([c2.faixas, c2.historico.pedidos], [[], 1]);
+    await rej(cat.produtoDetalhe('100409', '9500001', 'NAOEXISTE'), 404);
+    await rej(cat.produtoDetalhe('100409', '9500001', ''), 422);
+    await rej(cat.produtoDetalhe('310002', '9500001', 'CAT1', { vendedores: ['310001'], rotas: ['RM'] }), 403);
+  });
+
+  await t('100. cotacao: proxima faixa do incentivo ("faltam N cx") e combos do carrinho (fechado e "quase la" com o que falta)', async () => {
+    const sug = (r) => r.combos.aplicados.find((x) => x.nome === 'Combo Sug');
+    const quase = (r) => r.combos.incompletos.find((x) => x.nome === 'Combo Sug');
+    // 5 cx de CAT1: falta 5 para a faixa de 10 cx (3%) e o Combo Sug (CAT1 5 + CAT2 6) so precisa de 6 cx de CAT2
+    let r = await cat.cotar('100409', '9500001', [{ produto: 'CAT1', quantidade: '5' }]);
+    assert.deepEqual(r.itens[0].proxima_faixa, { qtd_minima: 10, desconto_pct: 3, extra_max_pct: 2, falta: 5 });
+    assert.ok(quase(r) && !sug(r));
+    assert.deepEqual(quase(r).faltas.map((f) => [f.alvo_tipo, f.alvo_valor, f.alvo_descricao, f.falta]), [['produto', 'CAT2', 'Presunto Catalogo', 6]]);
+    assert.equal(quase(r).desconto_pct, 5);
+    // combo fechado: aplicado e sai de "quase la"; o desconto do combo (5%) e maior que a faixa (3%), entao nao oferece a faixa
+    r = await cat.cotar('100409', '9500001', [{ produto: 'CAT1', quantidade: '5' }, { produto: 'CAT2', quantidade: '6' }]);
+    assert.ok(sug(r) && !quase(r));
+    assert.deepEqual([sug(r).vezes, sug(r).desconto_pct, sug(r).brinde], [1, 5, null]);
+    assert.equal(r.itens[0].proxima_faixa, null);
+    // ja na ultima faixa: nada a oferecer; e sem combo fechado o incentivo de 3% vale
+    r = await cat.cotar('100409', '9500001', [{ produto: 'CAT1', quantidade: '10' }]);
+    assert.equal(r.itens[0].proxima_faixa, null);
+    assert.equal(r.itens[0].desconto_auto, 3);
+    // bonificacao nao tem incentivo nem combo
+    r = await cat.cotar('100409', '9500001', [{ produto: 'CAT1', quantidade: '5' }], null, 'bonificacao');
+    assert.deepEqual([r.itens[0].proxima_faixa, r.combos.aplicados, r.combos.incompletos], [null, [], []]);
+    assert.deepEqual((await cat.cotar('100409', '9500001', [])).combos, { aplicados: [], incompletos: [] });
+  });
+
+  await t('101. alertas do vendedor: corte nas remessas futuras, item recusado e faturado a menos, so da propria carteira', async () => {
+    await db.exec(`
+      delete from remessas where ordem like 'ALT%' or ordem like 'MEU%'; delete from pedido_itens_sap where ordem like 'ALT%'; delete from pedidos_sap where ordem like 'ALT%';
+      update clientes set telefone = '81999990001' where cod_cliente = '9700001';
+      insert into pedidos_sap(ordem, cod_cliente, dt_criacao, valor, status) values
+        ('ALT1', '9700001', current_date - 1, 100, 'Faturado'), ('ALT2', '9700002', current_date - 3, 100, 'Recusado'),
+        ('ALT3', '9700001', current_date - 20, 100, 'Faturado'), ('ALT4', '9700099', current_date - 1, 100, 'Faturado');
+      insert into pedido_itens_sap(ordem, item, cod_produto, denominacao, quantidade, unidade_venda, recusa, cod_recusa, situacao, qtd_faturada) values
+        ('ALT1', '10', 'P1', 'Queijo', 10, 'CX', null, null, 'Atendido Parcialmente', 7),
+        ('ALT1', '20', 'P2', 'Presunto', 5, 'CX', null, null, 'Atendido', 5),
+        ('ALT2', '10', 'P3', 'Mortadela', 4, 'CX', 'Sem estoque', '03', null, null),
+        ('ALT3', '10', 'P1', 'Queijo antigo', 10, 'CX', null, null, 'Atendido Parcialmente', 2),
+        ('ALT4', '10', 'P1', 'De outra carteira', 10, 'CX', 'Bloqueio', '09', null, null);
+      insert into remessas(ordem, item, data_remessa, cod_cliente, cod_produto, denominacao, unidade_venda, quantidade_pedida, quantidade_confirmada) values
+        ('ALT5', '10', current_date + 2, '9700001', 'P4', 'Leite', 'CX', 12, 8),
+        ('ALT5', '20', current_date + 2, '9700001', 'P5', 'Iogurte', 'CX', 6, 6),
+        ('ALT6', '10', current_date - 1, '9700001', 'P6', 'Remessa passada', 'CX', 9, 1),
+        ('ALT7', '10', current_date + 1, '9700099', 'P7', 'De outra carteira', 'CX', 9, 1);
+    `);
+    const a = await meu.alertas(UV);
+    const chave = (i) => [i.tipo, i.cod_cliente, i.ordem, i.item].join('|');
+    assert.deepEqual(a.itens.map(chave).sort(), [
+      'corte|9700001|ALT5|10', // 12 pedidas, 8 confirmadas, entrega futura
+      'faturado_menos|9700001|ALT1|10', // pediu 10, faturou 7 (pedido de ontem)
+      'recusa|9700002|ALT2|10', // recusado pelo SAP, com motivo
+    ].sort()); // ALT3 e antigo (20 dias), ALT6 ja passou, ALT4/ALT7 sao de outra carteira, item atendido por inteiro nao entra
+    assert.deepEqual([a.total, a.clientes, a.por_tipo], [3, 2, { corte: 1, recusa: 1, faturado_menos: 1 }]);
+    const corte = a.itens.find((i) => i.tipo === 'corte');
+    assert.deepEqual([corte.pedido, corte.confirmado, corte.produto, corte.cliente, corte.telefone], [12, 8, 'Leite', 'Mercado Um', '81999990001']);
+    const rec = a.itens.find((i) => i.tipo === 'recusa');
+    assert.deepEqual([rec.motivo, rec.cod_motivo, rec.pedido, rec.confirmado], ['Sem estoque', '03', 4, null]);
+    const menos = a.itens.find((i) => i.tipo === 'faturado_menos');
+    assert.deepEqual([menos.pedido, menos.confirmado, menos.motivo], [10, 7, 'Atendido Parcialmente']);
+    // janela maior traz o pedido de 20 dias; o vendedor nao ve a carteira de outro; quem nao e vendedor precisa escolher
+    assert.ok((await meu.alertas(UV, undefined, '30')).itens.some((i) => i.ordem === 'ALT3'));
+    assert.equal((await meu.alertas(UV, '310002')).itens.some((i) => i.cod_cliente === '9700099'), false);
+    await rej(meu.alertas(UA), 422, /Escolha o vendedor/);
+    assert.equal((await meu.alertas(UA, '310002')).itens.length, 2); // o outro vendedor (rota RN) tem 2 itens com problema (ALT4 e ALT7)
   });
 
   server.close();

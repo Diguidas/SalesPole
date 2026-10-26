@@ -117,6 +117,37 @@ export function avaliarCombosSrv(
   return { brindes, brindesPorCombo, descontoPorProduto };
 }
 
+export interface StatusComboSrv {
+  /** combos que o pedido ja fecha (com o beneficio efetivo: brinde ja multiplicado pelas vezes) */
+  aplicados: Array<{ combo: ComboRow; vezes: number; descontoPct: number; brindeQtd: number }>;
+  /** combos que servem ao comprador e o pedido ja comeca a formar: falta X para fechar */
+  incompletos: Array<{ combo: ComboRow; faltas: Array<{ item: ItemCondicaoRow; falta: number }> }>;
+}
+
+/** O que o carrinho fecha e o que falta para fechar (para a tela avisar "falta 2 cx do produto X"). */
+export function statusCombosSrv(
+  combos: ComboRow[],
+  linhasBrutas: LinhaCombo[],
+  ctx: ContextoIncentivo,
+  classificacaoPorProduto: Record<string, ClassificacaoSrv | undefined>,
+): StatusComboSrv {
+  const linhas = linhasBrutas.filter((l) => l.quantidade > 0).map((l) => ({ produto: l.produto, qtd: l.quantidade }));
+  const completos: Array<{ c: ComboRow; vezes: number; total: number }> = [];
+  const incompletos: StatusComboSrv['incompletos'] = [];
+  for (const c of combos) {
+    if (!comboVale(c, ctx) || !c.itens?.length) continue;
+    const r = avaliarCondicao(c.itens, linhas, classificacaoPorProduto);
+    if (r.completo) completos.push({ c, vezes: vezesDoCombo(c, r.razoes), total: r.total });
+    else if (r.algumProgresso) incompletos.push({ combo: c, faltas: r.faltas });
+  }
+  const aplicados = semSubstituidos(completos, (x) => x.c).map(({ c, vezes, total }) => {
+    const { brindeQtd, descontoPct } = beneficioDaFaixa(c, c.repete ? null : faixaAtingida(c.faixas, total));
+    return { combo: c, vezes, descontoPct, brindeQtd: brindeQtd * vezes };
+  });
+  const soma = (f: StatusComboSrv['incompletos'][number]) => f.faltas.reduce((a, x) => a + x.falta, 0);
+  return { aplicados, incompletos: incompletos.sort((a, b) => soma(a) - soma(b)) };
+}
+
 /**
  * Erros do brinde: cada produto de brinde do pedido precisa caber no que os combos dao (somando as linhas do mesmo
  * produto). Brinde sem combo que o sustente, ou acima do que ele da, e recusado.

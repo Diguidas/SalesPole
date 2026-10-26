@@ -18,10 +18,11 @@ const PAPEIS = [
   { v: 'supervisor', r: 'Supervisor (só a equipe dele: pedidos, clientes, visitas, bonificações)' },
   { v: 'gerente', r: 'Gerente (só as equipes dos supervisores dele)' },
   { v: 'gerente_geral', r: 'Gerente geral (vê tudo, sem cadastros e sistema)' },
+  { v: 'vendedor', r: 'Vendedor no computador (só a própria carteira: Hoje, pedidos, clientes, títulos)' },
 ];
-const ROTULO_PAPEL: Record<Papel, string> = { admin: 'Administrador', aprovador: 'Aprovador', consulta: 'Consulta', supervisor: 'Supervisor', gerente: 'Gerente', gerente_geral: 'Gerente geral' };
+const ROTULO_PAPEL: Record<Papel, string> = { admin: 'Administrador', aprovador: 'Aprovador', consulta: 'Consulta', supervisor: 'Supervisor', gerente: 'Gerente', gerente_geral: 'Gerente geral', vendedor: 'Vendedor' };
 /** Papéis ligados ao SAP: a equipe vem da ZSDT087 pelo código do fornecedor (LIFNR). */
-const PAPEIS_SAP: string[] = ['supervisor', 'gerente'];
+const PAPEIS_SAP: string[] = ['supervisor', 'gerente', 'vendedor'];
 
 /** Gestao de acessos: quem entra no painel e quem usa o app (e-mail -> vendedor). So administrador. */
 export function UsuariosScreen() {
@@ -159,7 +160,7 @@ function Lista({ aba, meuEmail }: { aba: Aba; meuEmail: string }) {
                   <label className="campo">
                     <span>Código SAP {PAPEIS_SAP.includes(String(form.v.papel)) ? '*' : '(opcional)'}</span>
                     <input type="text" inputMode="numeric" value={String(form.v.cod_sap ?? '')} required={PAPEIS_SAP.includes(String(form.v.papel))} maxLength={10} onChange={(e) => set('cod_sap', e.target.value)} placeholder="Ex.: 100409 (LIFNR do supervisor/gerente)" />
-                    <small className="suave">É por esse código que o sistema acha a equipe: supervisor pelo escritório/equipe, gerente pelos supervisores dele.</small>
+                    <small className="suave">É por esse código que o sistema acha a equipe: supervisor pelo escritório/equipe, gerente pelos supervisores dele e vendedor pela própria carteira (código do vendedor no SAP).</small>
                   </label>
                 )}
                 <PermissoesCampos papel={String(form.v.papel)} valor={perm} aoMudar={setPerm} />

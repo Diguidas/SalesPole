@@ -7,9 +7,9 @@ import { invalidarEscopo } from './escopo';
 import { ajustesDe, permissoesEfetivas } from './permissoes';
 import { PapelPainel } from './painel.guard';
 
-const PAPEIS = ['admin', 'aprovador', 'consulta', 'supervisor', 'gerente', 'gerente_geral'];
+const PAPEIS = ['admin', 'aprovador', 'consulta', 'supervisor', 'gerente', 'gerente_geral', 'vendedor'];
 /** Papeis ligados a um codigo do SAP (supervisor/gerente: a equipe vem da ZSDT087). */
-const PAPEIS_SAP = ['supervisor', 'gerente'];
+const PAPEIS_SAP = ['supervisor', 'gerente', 'vendedor'];
 const SENHA_MIN = 8;
 
 const erro = (m: string) => new UnprocessableEntityException(m);
@@ -120,7 +120,7 @@ export class UsuariosService {
     const { data: u, error } = await this.sb.from('usuarios_painel').select('email, nome, papel, cod_sap, ativo').eq('email', e).maybeSingle();
     if (error) throw error;
     if (!u) throw erro('Usuario nao encontrado');
-    if (PAPEIS_SAP.includes(papelNovo) && !u.cod_sap) throw erro('Supervisor e gerente precisam do codigo SAP: edite o usuario e informe');
+    if (PAPEIS_SAP.includes(papelNovo) && !u.cod_sap) throw erro('Supervisor, gerente e vendedor precisam do codigo SAP: edite o usuario e informe');
     if (e === atual.email && papelNovo !== 'admin') throw new ConflictException('Voce nao pode remover o seu proprio acesso de administrador');
     if (papelNovo !== 'admin') await this.garantirOutroAdmin(e);
     const { error: e2 } = await this.sb.from('usuarios_painel').update({ papel: papelNovo }).eq('email', e);
@@ -141,7 +141,7 @@ export class UsuariosService {
     let cod_sap: string | null = null;
     const codInformado = String(b.cod_sap ?? '').trim();
     if (PAPEIS_SAP.includes(papel) || codInformado) {
-      if (!/^\d{1,10}$/.test(codInformado)) throw erro('Informe o codigo SAP (apenas numeros) do supervisor/gerente');
+      if (!/^\d{1,10}$/.test(codInformado)) throw erro('Informe o codigo SAP (apenas numeros) do supervisor, gerente ou vendedor');
       cod_sap = normCod(codInformado);
     }
     const marcadas = b.permissoes && typeof b.permissoes === 'object' && !Array.isArray(b.permissoes) ? b.permissoes : Array.isArray(b.permissoes) ? Object.fromEntries((b.permissoes as unknown[]).map((k) => [String(k), true])) : null;

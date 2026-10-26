@@ -146,6 +146,7 @@ export function PedidoDetalhe({ ordem, aoMudar }: { ordem: string; aoMudar?: () 
             )}
 
             <div style={{ display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap' }}>
+              {tem(usuario, 'criar_pedido') && d.vendedores[0] && <Link className="btn" to={`/novo-pedido?vendedor=${d.vendedores[0].cod_vendedor}&cliente=${d.cod_cliente}&duplicar=${d.ordem}`} title="Abre um novo pedido para este cliente com os mesmos itens">Duplicar pedido</Link>}
               <button className="btn" disabled={ocupado} onClick={atualizar}>{ocupado ? 'Aguarde…' : 'Atualizar do SAP'}</button>
               {d.pedido_app_id && <button className="btn" disabled={ocupado} onClick={() => { setErro(null); imprimirPedidoApp(d.pedido_app_id!).catch((e) => setErro((e as Error).message)); }} title="Abre a confirmação do pedido; escolha Salvar como PDF">PDF do pedido</button>}
               {podeCancelar && d.cancelavel && !cancelando && <button className="btn erro" disabled={ocupado} onClick={() => setCancelando(true)}>Cancelar pedido</button>}

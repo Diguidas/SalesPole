@@ -22,6 +22,7 @@ export const PADROES: Record<PapelPainel, Permissao[]> = {
   supervisor: APROVA,
   gerente: APROVA,
   gerente_geral: APROVA,
+  vendedor: ['criar_pedido', 'cancelar_pedido'],
 };
 
 /** Permissoes efetivas: padrao do papel + ajustes do usuario. Admin: todas. */

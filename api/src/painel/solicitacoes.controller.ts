@@ -2,7 +2,7 @@ import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, Req, UseGuard
 import { SupabaseAuthGuard } from '../auth/auth.guard';
 import { VendedorLogado } from '../auth/vendedor.decorator';
 import { VendedorLogado as Logado } from '../auth/vendedores.service';
-import { PainelGuard, UsuarioPainel } from './painel.guard';
+import { PainelGuard, UsuarioPainel, VendedorOk } from './painel.guard';
 import { SolicitacoesService } from './solicitacoes.service';
 
 type ReqPainel = { usuarioPainel: UsuarioPainel };
@@ -32,6 +32,7 @@ export class SolicitacoesController {
   }
 
   // ---- supervisor (app, login proprio: sem X-Vendedor) ----
+  @VendedorOk()
   @Get('equipe/solicitacoes/opcoes')
   @UseGuards(PainelGuard)
   opcoesSupervisor() {
@@ -51,6 +52,7 @@ export class SolicitacoesController {
   }
 
   // ---- painel ----
+  @VendedorOk()
   @Get('painel/solicitacoes')
   @UseGuards(PainelGuard)
   listar(@Req() req: ReqPainel, @Query('tipo') tipo?: string, @Query('busca') busca?: string, @Query('pagina') pagina?: string) {
@@ -58,24 +60,28 @@ export class SolicitacoesController {
   }
 
   // criar pelo painel: admin, supervisor, gerente e gerente geral (cadastro em nome de um vendedor da equipe)
+  @VendedorOk()
   @Get('painel/solicitacoes/vendedores')
   @UseGuards(PainelGuard)
   vendedoresPainel(@Req() req: ReqPainel) {
     return this.solicitacoes.vendedoresDoPainel(req.usuarioPainel);
   }
 
+  @VendedorOk()
   @Get('painel/solicitacoes/vendedor/:cod')
   @UseGuards(PainelGuard)
   vendedorPainel(@Req() req: ReqPainel, @Param('cod') cod: string) {
     return this.solicitacoes.dadosVendedorDoPainel(req.usuarioPainel, cod);
   }
 
+  @VendedorOk()
   @Post('painel/solicitacoes/cadastro-cliente')
   @UseGuards(PainelGuard)
   cadastrarPainel(@Req() req: ReqPainel, @Body() corpo: Record<string, unknown>) {
     return this.solicitacoes.cadastrarClientePeloPainel(req.usuarioPainel, corpo);
   }
 
+  @VendedorOk()
   @Get('painel/solicitacoes/:id')
   @UseGuards(PainelGuard)
   detalhe(@Req() req: ReqPainel, @Param('id', ParseUUIDPipe) id: string) {
